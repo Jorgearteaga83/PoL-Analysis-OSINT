@@ -6,8 +6,7 @@ import json
 import shutil
 import webbrowser
 from pathlib import Path
-from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import datetime
 from typing import Any, Optional
 
 import tkinter as tk
@@ -15,11 +14,17 @@ from tkinter import ttk, messagebox, filedialog
 
 import pandas as pd
 from PIL import Image, ImageTk, ExifTags
+import openpyxl
+
+# Charts
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.dates as mdates
 
 
-# -----------------------------
+# =========================================================
 # Directories
-# -----------------------------
+# =========================================================
 DATA_DIR = Path("data")
 OUTPUT_DIR = Path("output")
 OUTPUT_IMAGES_DIR = OUTPUT_DIR / "images"
@@ -33,10 +38,11 @@ def ensure_directories():
     OUTPUT_IMAGES_DIR.mkdir(exist_ok=True, parents=True)
 
 
-# -----------------------------
-# Utility functions
-# -----------------------------
+# =========================================================
+# Utility helpers
+# =========================================================
 def best_col(df: pd.DataFrame, candidates: list[str]) -> Optional[str]:
+    """Return the first matching column name from candidates (case-insensitive)."""
     cols_lower = {c.lower(): c for c in df.columns}
     for cand in candidates:
         if cand.lower() in cols_lower:
@@ -45,13 +51,14 @@ def best_col(df: pd.DataFrame, candidates: list[str]) -> Optional[str]:
 
 
 def to_datetime_safe(x: Any) -> pd.Timestamp | pd.NaT:
+    """Parse timestamps robustly (unix seconds/ms OR ISO strings). Always UTC."""
     if x is None or (isinstance(x, float) and pd.isna(x)):
         return pd.NaT
 
     if isinstance(x, (int, float)) and not pd.isna(x):
         try:
             xi = int(x)
-            if xi > 10_000_000_000:
+            if xi > 10_000_000_000:  # likely ms
                 return pd.to_datetime(xi, unit="ms", utc=True, errors="coerce")
             return pd.to_datetime(xi, unit="s", utc=True, errors="coerce")
         except Exception:
@@ -81,6 +88,7 @@ def safe_json_loads(s: str):
 
 
 def extract_tagged_users(cell: Any) -> list[str]:
+    """Extract tagged usernames from list/dict/json-string or comma/space string."""
     if cell is None or (isinstance(cell, float) and pd.isna(cell)):
         return []
 
@@ -119,9 +127,9 @@ def extract_tagged_users(cell: Any) -> list[str]:
     return sorted({x for x in cleaned if x})
 
 
-# -----------------------------
+# =========================================================
 # EXIF GPS parsing
-# -----------------------------
+# =========================================================
 GPSTAGS = ExifTags.GPSTAGS
 
 
@@ -151,6 +159,12 @@ def dms_to_decimal(dms, ref):
 
 
 def extract_exif(path: Path):
+    """
+    Returns:
+        exif_readable(bool) -> could we read EXIF container
+        gps_present(bool)    -> GPS fields present
+        lat(float|None), lon(float|None)
+    """
     try:
         img = Image.open(path)
         exif = img.getexif()
@@ -174,28 +188,29 @@ def extract_exif(path: Path):
         for key, val in gps_info.items():
             decoded[GPSTAGS.get(key, key)] = val
 
-        lat = None
-        lon = None
-
+        lat = lon = None
         if "GPSLatitude" in decoded and "GPSLatitudeRef" in decoded:
             lat = dms_to_decimal(decoded["GPSLatitude"], str(decoded["GPSLatitudeRef"]))
-
         if "GPSLongitude" in decoded and "GPSLongitudeRef" in decoded:
             lon = dms_to_decimal(decoded["GPSLongitude"], str(decoded["GPSLongitudeRef"]))
 
         return True, True, lat, lon
-
     except Exception:
         return False, False, None, None
 
 
-# -----------------------------
+# =========================================================
 # Dataset Normalizer
-# -----------------------------
+# =========================================================
 def normalize_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Harmonise heterogeneous CSV/XLSX schemas into a consistent OSINT analysis table.
+    Output schema:
+        post_id, username, timestamp_utc, caption, display_url, post_url, location,
+        tagged_users(list[str]), image_ref
+    """
     df = df_raw.copy()
 
-    # detect columns
     c_post = best_col(df, ["post_id", "id", "postId", "shortCode", "shortcode"])
     c_user = best_col(df, ["account", "username", "ownerUsername", "owner.username"])
     c_time = best_col(df, ["timestamp_utc", "timestamp", "takenAtTimestamp", "createdAt"])
@@ -207,24 +222,15 @@ def normalize_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
     c_img = best_col(df, ["image_ref", "image_filename", "imageFilename", "image_path", "local_path"])
 
     out = pd.DataFrame()
-
     out["post_id"] = df[c_post].astype(str) if c_post else ""
     out["username"] = df[c_user].astype(str) if c_user else "unknown"
 
-    # timestamp safe parse
-    if c_time:
-        out["timestamp_utc"] = df[c_time].apply(to_datetime_safe)
-    else:
-        out["timestamp_utc"] = pd.NaT
-
+    out["timestamp_utc"] = df[c_time].apply(to_datetime_safe) if c_time else pd.NaT
     out["caption"] = df[c_caption].fillna("").astype(str) if c_caption else ""
     out["display_url"] = df[c_url].fillna("").astype(str) if c_url else ""
-
     out["post_url"] = df[c_posturl].fillna("").astype(str) if c_posturl else ""
-
     out["location"] = df[c_loc].fillna("").astype(str) if c_loc else ""
 
-    # tagged users handling (string list, json list, or normal text)
     if c_tagged:
         out["tagged_users"] = df[c_tagged].apply(extract_tagged_users)
     else:
@@ -232,7 +238,7 @@ def normalize_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
 
     out["image_ref"] = df[c_img].fillna("").astype(str) if c_img else ""
 
-    # final cleanup
+    # cleanup
     out["username"] = out["username"].fillna("unknown").astype(str).str.strip()
     out["post_id"] = out["post_id"].fillna("").astype(str).str.strip()
 
@@ -242,9 +248,62 @@ def normalize_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
-# -----------------------------
-# Main GUI
-# -----------------------------
+# =========================================================
+# Sentiment engine (VADER if available, else fallback)
+# =========================================================
+class SentimentEngine:
+    """
+    Uses vaderSentiment if installed:
+        pip install vaderSentiment
+    If not installed, uses a lightweight lexicon fallback (not as strong as VADER,
+    but sufficient for offline demonstration).
+    """
+
+    def __init__(self):
+        self.mode = "fallback"
+        self.analyzer = None
+        try:
+            from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer  # type: ignore
+
+            self.analyzer = SentimentIntensityAnalyzer()
+            self.mode = "vader"
+        except ImportError:
+            self.mode = "fallback"
+            self.analyzer = None
+
+        # Minimal fallback lexicon (expand if you want)
+        self.pos_words = {
+            "good", "great", "amazing", "love", "happy", "nice", "excellent", "fun", "win", "success",
+            "beautiful", "best", "awesome", "positive", "enjoy", "wonderful"
+        }
+        self.neg_words = {
+            "bad", "terrible", "hate", "sad", "angry", "awful", "worst", "fail", "failure", "negative",
+            "pain", "cry", "depressed", "stress", "upset"
+        }
+
+    def score(self, text: str) -> float:
+        text = (text or "").strip()
+        if not text:
+            return 0.0
+
+        if self.mode == "vader" and self.analyzer is not None:
+            # VADER returns compound in [-1, 1]
+            return float(self.analyzer.polarity_scores(text).get("compound", 0.0))
+
+        # Fallback: simple normalized polarity
+        words = re.findall(r"[A-Za-z']+", text.lower())
+        if not words:
+            return 0.0
+        pos = sum(1 for w in words if w in self.pos_words)
+        neg = sum(1 for w in words if w in self.neg_words)
+        raw = pos - neg
+        # normalize to approx [-1, 1]
+        return max(-1.0, min(1.0, raw / max(5, len(words) / 2)))
+
+
+# =========================================================
+# Main GUI App
+# =========================================================
 class OSINTCleanGUI(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -253,13 +312,16 @@ class OSINTCleanGUI(tk.Tk):
         self.configure(bg="#050910")
 
         self.df_all: Optional[pd.DataFrame] = None
-        self.df_view: Optional[pd.DataFrame] = None
-
         self.preview_img = None
+
+        self.sentiment = SentimentEngine()
 
         self.setup_style()
         self.build_ui()
 
+    # -----------------------------
+    # Styling
+    # -----------------------------
     def setup_style(self):
         style = ttk.Style()
         try:
@@ -282,6 +344,9 @@ class OSINTCleanGUI(tk.Tk):
         )
         style.map("Dark.Treeview", background=[("selected", "#28406A")], foreground=[("selected", "#FFFFFF")])
 
+    # -----------------------------
+    # UI layout
+    # -----------------------------
     def build_ui(self):
         main = ttk.Frame(self, style="Dark.TFrame")
         main.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -327,6 +392,7 @@ class OSINTCleanGUI(tk.Tk):
 
         ttk.Button(left, text="Overview Analysis", style="Dark.TButton", command=self.show_overview).pack(fill=tk.X, pady=3)
         ttk.Button(left, text="Temporal Analysis", style="Dark.TButton", command=self.show_temporal).pack(fill=tk.X, pady=3)
+        ttk.Button(left, text="Sentiment Analysis", style="Dark.TButton", command=self.show_sentiment).pack(fill=tk.X, pady=3)
         ttk.Button(left, text="Leakage Analysis", style="Dark.TButton", command=self.show_leakage).pack(fill=tk.X, pady=3)
         ttk.Button(left, text="Raw Posts", style="Dark.TButton", command=self.show_raw).pack(fill=tk.X, pady=3)
 
@@ -335,12 +401,16 @@ class OSINTCleanGUI(tk.Tk):
         self.status_var = tk.StringVar(value="Ready.")
         ttk.Label(left, textvariable=self.status_var, style="Dark.TLabel", wraplength=330).pack(anchor="w")
 
-        # RIGHT PANEL (dynamic content)
+        # RIGHT PANEL
         self.right = ttk.Frame(main, style="Dark.TFrame")
         self.right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.title_label = ttk.Label(self.right, text="Upload a dataset to begin.", style="Dark.TLabel",
-                                     font=("Segoe UI", 14, "bold"))
+        self.title_label = ttk.Label(
+            self.right,
+            text="Upload a dataset to begin.",
+            style="Dark.TLabel",
+            font=("Segoe UI", 14, "bold"),
+        )
         self.title_label.pack(anchor="w", pady=(0, 10))
 
         self.content_frame = ttk.Frame(self.right, style="Dark.TFrame")
@@ -393,7 +463,6 @@ class OSINTCleanGUI(tk.Tk):
         self.dataset_label.set(f"Loaded: {p.name}\nRows: {len(self.df_all):,}\nTargets: {len(users)}")
         self.status_var.set("Dataset loaded successfully.")
 
-        # save combined normalized dataset
         try:
             self.df_all.to_csv(OUTPUT_DIR / "normalized_dataset.csv", index=False)
         except Exception:
@@ -408,22 +477,19 @@ class OSINTCleanGUI(tk.Tk):
 
         df = self.df_all.copy()
 
+        # target filter
         t = self.target_var.get()
         if t and t != "(all)":
             df = df[df["username"] == t]
 
+        # time-window filter
         mode = self.window_var.get()
 
-        if mode == "Last 7 days":
+        if mode in ("Last 7 days", "Last 30 days"):
             max_date = df["timestamp_utc"].max()
             if pd.notna(max_date):
-                cutoff = max_date - pd.Timedelta(days=7)
-                df = df[df["timestamp_utc"] >= cutoff]
-
-        elif mode == "Last 30 days":
-            max_date = df["timestamp_utc"].max()
-            if pd.notna(max_date):
-                cutoff = max_date - pd.Timedelta(days=30)
+                days = 7 if mode == "Last 7 days" else 30
+                cutoff = max_date - pd.Timedelta(days=days)
                 df = df[df["timestamp_utc"] >= cutoff]
 
         elif mode == "Custom range":
@@ -440,7 +506,7 @@ class OSINTCleanGUI(tk.Tk):
         return df.sort_values("timestamp_utc", ascending=False)
 
     # -----------------------------
-    # UI helper
+    # UI helpers
     # -----------------------------
     def clear_content(self):
         for child in self.content_frame.winfo_children():
@@ -473,9 +539,16 @@ class OSINTCleanGUI(tk.Tk):
         if url.startswith("http://") or url.startswith("https://"):
             webbrowser.open(url)
 
-    # -----------------------------
+    def embed_plot(self, fig):
+        """Embed a matplotlib Figure into the content frame (Tk canvas)."""
+        canvas = FigureCanvasTkAgg(fig, master=self.content_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.X, pady=(0, 10))
+        return canvas
+
+    # =========================================================
     # Analyses
-    # -----------------------------
+    # =========================================================
     def show_overview(self):
         df = self.filtered_df()
         self.clear_content()
@@ -518,7 +591,7 @@ class OSINTCleanGUI(tk.Tk):
                 ],
             )
 
-        def on_double_click(event):
+        def on_double_click(_event):
             item = tree.selection()
             if not item:
                 return
@@ -528,6 +601,12 @@ class OSINTCleanGUI(tk.Tk):
         tree.bind("<Double-1>", on_double_click)
 
     def show_temporal(self):
+        """
+        Temporal Analysis:
+          - Posts per day (chart + table) with clear x-axis ticks
+          - Posts per hour (bar chart + table)
+          - Posts per weekday (bar chart + table)
+        """
         df = self.filtered_df()
         self.clear_content()
         self.title_label.config(text="Temporal Analysis")
@@ -537,28 +616,201 @@ class OSINTCleanGUI(tk.Tk):
             return
 
         df = df.copy()
+        df = df[pd.notna(df["timestamp_utc"])]
+
+        if df.empty:
+            ttk.Label(self.content_frame, text="No valid timestamps available.", style="Dark.TLabel").pack(anchor="w")
+            return
+
         df["date"] = df["timestamp_utc"].dt.date
         df["hour"] = df["timestamp_utc"].dt.hour
         df["weekday"] = df["timestamp_utc"].dt.day_name()
 
-        per_day = df.groupby("date")["post_id"].count().reset_index(name="posts")
-        per_hour = df.groupby("hour")["post_id"].count().reset_index(name="posts")
-        per_weekday = df.groupby("weekday")["post_id"].count().reset_index(name="posts")
+        per_day = df.groupby("date")["post_id"].count().reset_index(name="posts").sort_values("date")
+        per_hour = df.groupby("hour")["post_id"].count().reset_index(name="posts").sort_values("hour")
 
-        ttk.Label(self.content_frame, text="Posts per day", style="Dark.TLabel", font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        per_weekday = (
+            df.groupby("weekday")["post_id"].count().reindex(weekday_order, fill_value=0).reset_index(name="posts")
+        )
+
+        # ---------- Posts per Day (IMPROVED X-AXIS) ----------
+        ttk.Label(
+            self.content_frame,
+            text="Posts per Day",
+            style="Dark.TLabel",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w", pady=(0, 5))
+
+        per_day_plot = per_day.copy()
+        per_day_plot["date"] = pd.to_datetime(per_day_plot["date"])
+
+        fig1, ax1 = plt.subplots(figsize=(9, 3.8))
+        ax1.plot(per_day_plot["date"], per_day_plot["posts"], marker="o")
+        ax1.set_title("Posting Frequency Over Time")
+        ax1.set_xlabel("Date")
+        ax1.set_ylabel("Posts")
+
+        ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+        for label in ax1.get_xticklabels():
+            label.set_rotation(45)
+            label.set_ha("right")
+
+        fig1.tight_layout()
+        self.embed_plot(fig1)
+
         tree1 = self.make_tree(["date", "posts"], ["Date", "Posts"], [180, 120])
         for _, r in per_day.iterrows():
             tree1.insert("", tk.END, values=[r["date"], r["posts"]])
 
-        ttk.Label(self.content_frame, text="Posts per hour", style="Dark.TLabel", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(12, 0))
+        # ---------- Posts per Hour ----------
+        ttk.Label(
+            self.content_frame,
+            text="Posts per Hour",
+            style="Dark.TLabel",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w", pady=(12, 5))
+
+        fig2, ax2 = plt.subplots(figsize=(9, 3.2))
+        ax2.bar(per_hour["hour"].astype(int), per_hour["posts"].astype(int))
+        ax2.set_title("Diurnal Posting Pattern")
+        ax2.set_xlabel("Hour of Day (0–23)")
+        ax2.set_ylabel("Posts")
+        ax2.set_xticks(list(range(0, 24, 1)))
+        for label in ax2.get_xticklabels():
+            label.set_rotation(0)
+        fig2.tight_layout()
+        self.embed_plot(fig2)
+
         tree2 = self.make_tree(["hour", "posts"], ["Hour", "Posts"], [120, 120])
         for _, r in per_hour.iterrows():
-            tree2.insert("", tk.END, values=[r["hour"], r["posts"]])
+            tree2.insert("", tk.END, values=[int(r["hour"]), int(r["posts"])])
 
-        ttk.Label(self.content_frame, text="Posts per weekday", style="Dark.TLabel", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(12, 0))
+        # ---------- Posts per Weekday ----------
+        ttk.Label(
+            self.content_frame,
+            text="Posts per Weekday",
+            style="Dark.TLabel",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w", pady=(12, 5))
+
+        fig3, ax3 = plt.subplots(figsize=(9, 3.2))
+        ax3.bar(per_weekday["weekday"], per_weekday["posts"])
+        ax3.set_title("Weekly Posting Pattern")
+        ax3.set_xlabel("Weekday")
+        ax3.set_ylabel("Posts")
+        for label in ax3.get_xticklabels():
+            label.set_rotation(25)
+            label.set_ha("right")
+        fig3.tight_layout()
+        self.embed_plot(fig3)
+
         tree3 = self.make_tree(["weekday", "posts"], ["Weekday", "Posts"], [180, 120])
         for _, r in per_weekday.iterrows():
-            tree3.insert("", tk.END, values=[r["weekday"], r["posts"]])
+            tree3.insert("", tk.END, values=[r["weekday"], int(r["posts"])])
+
+    def show_sentiment(self):
+        """
+        Sentiment Analysis:
+          - compute post-level sentiment from captions
+          - show daily average sentiment (chart with readable x-axis)
+          - show summary stats + table of recent scored posts
+        """
+        df = self.filtered_df()
+        self.clear_content()
+        self.title_label.config(text="Sentiment Analysis")
+
+        if df.empty:
+            ttk.Label(self.content_frame, text="No posts match this filter.", style="Dark.TLabel").pack(anchor="w")
+            return
+
+        df = df.copy()
+        df = df[pd.notna(df["timestamp_utc"])]
+
+        if df.empty:
+            ttk.Label(self.content_frame, text="No valid timestamps available.", style="Dark.TLabel").pack(anchor="w")
+            return
+
+        df["caption"] = df["caption"].fillna("").astype(str)
+        df["sentiment"] = df["caption"].apply(self.sentiment.score)
+        df["date"] = df["timestamp_utc"].dt.date
+
+        daily = df.groupby("date")["sentiment"].mean().reset_index(name="avg_sentiment").sort_values("date")
+        daily["date"] = pd.to_datetime(daily["date"])
+
+        # Summary stats
+        mean_s = float(df["sentiment"].mean())
+        med_s = float(df["sentiment"].median())
+        min_s = float(df["sentiment"].min())
+        max_s = float(df["sentiment"].max())
+
+        ttk.Label(
+            self.content_frame,
+            text=f"Engine: {self.sentiment.mode.upper()} | Mean: {mean_s:.3f} | Median: {med_s:.3f} | Min: {min_s:.3f} | Max: {max_s:.3f}",
+            style="Dark.TLabel",
+            font=("Consolas", 11),
+        ).pack(anchor="w", pady=(0, 8))
+
+        # Chart (IMPROVED X-AXIS)
+        ttk.Label(
+            self.content_frame,
+            text="Average Sentiment per Day",
+            style="Dark.TLabel",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w", pady=(0, 5))
+
+        fig, ax = plt.subplots(figsize=(9, 3.8))
+        ax.plot(daily["date"], daily["avg_sentiment"], marker="o")
+        ax.axhline(0, linestyle="--")
+        ax.set_title("Daily Sentiment Trend (Average)")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Average Sentiment (≈ -1 to +1)")
+
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+        for label in ax.get_xticklabels():
+            label.set_rotation(45)
+            label.set_ha("right")
+
+        fig.tight_layout()
+        self.embed_plot(fig)
+
+        # Table of scored posts
+        ttk.Label(
+            self.content_frame,
+            text="Recent Posts (Scored)",
+            style="Dark.TLabel",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w", pady=(8, 5))
+
+        tree = self.make_tree(
+            columns=["timestamp_utc", "username", "sentiment", "caption", "display_url"],
+            headings=["Timestamp (UTC)", "User", "Sentiment", "Caption (truncated)", "displayUrl"],
+            widths=[180, 140, 100, 750, 350],
+        )
+
+        for _, r in df.head(500).iterrows():
+            tree.insert(
+                "",
+                tk.END,
+                values=[
+                    str(r["timestamp_utc"]),
+                    r["username"],
+                    f"{float(r['sentiment']):.3f}",
+                    str(r["caption"])[:180],
+                    r["display_url"],
+                ],
+            )
+
+        def on_double_click(_event):
+            item = tree.selection()
+            if not item:
+                return
+            vals = tree.item(item[0], "values")
+            self.open_url(str(vals[-1]))
+
+        tree.bind("<Double-1>", on_double_click)
 
     def show_raw(self):
         df = self.filtered_df()
@@ -589,7 +841,7 @@ class OSINTCleanGUI(tk.Tk):
                 ],
             )
 
-        def on_double_click(event):
+        def on_double_click(_event):
             item = tree.selection()
             if not item:
                 return
@@ -607,7 +859,6 @@ class OSINTCleanGUI(tk.Tk):
             ttk.Label(self.content_frame, text="No posts match this filter.", style="Dark.TLabel").pack(anchor="w")
             return
 
-        # Build layout: table + preview
         container = ttk.Frame(self.content_frame, style="Dark.TFrame")
         container.pack(fill=tk.BOTH, expand=True)
 
@@ -654,7 +905,6 @@ class OSINTCleanGUI(tk.Tk):
         details = tk.Text(right, height=12, bg="#050910", fg="#E5F0FF", insertbackground="#E5F0FF", wrap="word")
         details.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
 
-        # Fill table
         for _, r in df.iterrows():
             img_ref = str(r.get("image_ref", "")).strip()
             local_img_path = ""
@@ -664,7 +914,6 @@ class OSINTCleanGUI(tk.Tk):
                 if p.exists():
                     local_img_path = str(p)
                 else:
-                    # search common paths
                     candidates = [
                         DATA_DIR / img_ref,
                         DATA_DIR / "images" / img_ref,
@@ -683,9 +932,8 @@ class OSINTCleanGUI(tk.Tk):
             if local_img_path:
                 exif_present, gps_present, lat, lon = extract_exif(Path(local_img_path))
 
-                # copy to output/images
                 try:
-                    user_dir = OUTPUT_IMAGES_DIR / r["username"]
+                    user_dir = OUTPUT_IMAGES_DIR / str(r["username"])
                     user_dir.mkdir(parents=True, exist_ok=True)
                     dst = user_dir / Path(local_img_path).name
                     if not dst.exists():
@@ -708,7 +956,7 @@ class OSINTCleanGUI(tk.Tk):
                 ],
             )
 
-        def on_select(event):
+        def on_select(_event):
             sel = tree.selection()
             if not sel:
                 return
@@ -740,7 +988,7 @@ class OSINTCleanGUI(tk.Tk):
                 f"displayUrl: {url}\n",
             )
 
-        def on_double_click(event):
+        def on_double_click(_event):
             sel = tree.selection()
             if not sel:
                 return

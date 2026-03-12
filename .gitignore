@@ -1,0 +1,18 @@
+# IDE and virtual environment directories
+.idea/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Output files
+output/
+outputs/
+
+# Data files - optional, depends on whether you want to track data
+# data/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
