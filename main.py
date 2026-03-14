@@ -5,6 +5,8 @@ import re
 import json
 import shutil
 import webbrowser
+import requests
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Optional, Union
@@ -937,11 +939,14 @@ class OSINTCleanGUI(tk.Tk):
             tree.heading(c, text=h)
             tree.column(c, width=w, anchor="w")
 
-        preview_label = tk.Label(right, bg="#101620", fg="#E5F0FF", text="No image selected", width=55, height=20)
-        preview_label.pack(fill=tk.BOTH, expand=False)
+        right.rowconfigure(0, weight=1)  # Make the first row (image) expandable
+        right.columnconfigure(0, weight=1)
 
-        details = tk.Text(right, height=12, bg="#050910", fg="#E5F0FF", insertbackground="#E5F0FF", wrap="word")
-        details.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        preview_label = tk.Label(right, bg="#101620", fg="#E5F0FF", text="No image selected")
+        preview_label.grid(row=0, column=0, sticky="nsew")
+
+        details = tk.Text(right, height=8, bg="#050910", fg="#E5F0FF", insertbackground="#E5F0FF", wrap="word")
+        details.grid(row=1, column=0, sticky="ew", pady=(10, 0))
 
         for _, r in df.iterrows():
             img_ref = str(r.get("image_ref", "")).strip()
@@ -1010,8 +1015,36 @@ class OSINTCleanGUI(tk.Tk):
                     preview_label.config(image=self.preview_img, text="")
                 except Exception:
                     preview_label.config(image="", text="Preview failed")
+            elif url:
+                preview_label.config(image="", text="Downloading image...")
+                try:
+                    response = requests.get(url, timeout=10)
+                    if response.status_code == 200:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+                            tmp_file.write(response.content)
+                            tmp_path = Path(tmp_file.name)
+                        
+                        exif_present, gps_present, lat, lon = extract_exif(tmp_path)
+                        tree.set(sel[0], "exif", "Yes" if exif_present else "No")
+                        tree.set(sel[0], "gps", "Yes" if gps_present else "No")
+                        tree.set(sel[0], "lat", "" if lat is None else f"{lat:.6f}")
+                        tree.set(sel[0], "lon", "" if lon is None else f"{lon:.6f}")
+
+                        img = Image.open(tmp_path)
+                        img.thumbnail((520, 520))
+                        self.preview_img = ImageTk.PhotoImage(img)
+                        preview_label.config(image=self.preview_img, text="")
+                        local_img = str(tmp_path)
+                    elif response.status_code == 403:
+                        preview_label.config(image="", text="Image URL expired or forbidden.")
+                    else:
+                        preview_label.config(image="", text=f"Failed to download.\nStatus: {response.status_code}")
+                except requests.exceptions.RequestException as e:
+                    preview_label.config(image="", text=f"Download error:\n{e}")
+                except Exception:
+                    preview_label.config(image="", text="Image processing failed.")
             else:
-                preview_label.config(image="", text="No local image.\nProof via displayUrl only.")
+                preview_label.config(image="", text="No local image or URL.")
 
             details.delete("1.0", tk.END)
             details.insert(
