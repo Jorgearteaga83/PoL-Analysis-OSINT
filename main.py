@@ -7,19 +7,25 @@ import shutil
 import webbrowser
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-import pandas as pd
-from PIL import Image, ImageTk, ExifTags
-import openpyxl
+try:
+    import pandas as pd
+    from PIL import Image, ImageTk, ExifTags
+    import openpyxl
 
-# Charts
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.dates as mdates
+    # Charts
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    import matplotlib.dates as mdates
+except ImportError as e:
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showerror("Missing Libraries", f"Required library missing: {e}\n\nPlease run:\npip install pandas Pillow openpyxl matplotlib")
+    raise SystemExit
 
 
 # =========================================================
@@ -50,7 +56,10 @@ def best_col(df: pd.DataFrame, candidates: list[str]) -> Optional[str]:
     return None
 
 
-def to_datetime_safe(x: Any) -> pd.Timestamp | pd.NaT:
+NaTType = type(pd.NaT)
+
+
+def to_datetime_safe(x: Any) -> Union[pd.Timestamp, NaTType]:
     """Parse timestamps robustly (unix seconds/ms OR ISO strings). Always UTC."""
     if x is None or (isinstance(x, float) and pd.isna(x)):
         return pd.NaT
@@ -210,6 +219,7 @@ def normalize_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
         tagged_users(list[str]), image_ref
     """
     df = df_raw.copy()
+    out = pd.DataFrame()
 
     c_post = best_col(df, ["post_id", "id", "postId", "shortCode", "shortcode"])
     c_user = best_col(df, ["account", "username", "ownerUsername", "owner.username"])
@@ -218,23 +228,51 @@ def normalize_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
     c_url = best_col(df, ["display_url", "displayUrl", "imageUrl"])
     c_posturl = best_col(df, ["post_url", "url"])
     c_loc = best_col(df, ["location", "locationName", "location_name", "placeName"])
-    c_tagged = best_col(df, ["tagged_users", "taggedUsers", "userTags"])
-    c_img = best_col(df, ["image_ref", "image_filename", "imageFilename", "image_path", "local_path"])
+    c_img = best_col(df, ["image_ref", "imagePath", "local_path"])
 
-    out = pd.DataFrame()
-    out["post_id"] = df[c_post].astype(str) if c_post else ""
-    out["username"] = df[c_user].astype(str) if c_user else "unknown"
-
+    out["post_id"] = df[c_post].fillna("") if c_post else ""
+    out["username"] = df[c_user].fillna("unknown") if c_user else "unknown"
     out["timestamp_utc"] = df[c_time].apply(to_datetime_safe) if c_time else pd.NaT
-    out["caption"] = df[c_caption].fillna("").astype(str) if c_caption else ""
-    out["display_url"] = df[c_url].fillna("").astype(str) if c_url else ""
-    out["post_url"] = df[c_posturl].fillna("").astype(str) if c_posturl else ""
-    out["location"] = df[c_loc].fillna("").astype(str) if c_loc else ""
+    out["caption"] = df[c_caption].fillna("") if c_caption else ""
+    out["display_url"] = df[c_url].fillna("") if c_url else ""
+    out["post_url"] = df[c_posturl].fillna("") if c_posturl else ""
+    out["location"] = df[c_loc].fillna("") if c_loc else ""
 
-    if c_tagged:
-        out["tagged_users"] = df[c_tagged].apply(extract_tagged_users)
+    # --- Tagged Users (flexible extraction) ---
+    # This handles both a single column with JSON/list AND flattened columns
+    # like 'taggedUsers/0/username', 'taggedUsers/1/username', etc.
+    tagged_users_list = []
+    
+    # First, check for a simple, pre-parsed column
+    c_tagged_simple = best_col(df, ["tagged_users", "taggedUsers", "userTags"])
+    if c_tagged_simple:
+        tagged_users_list = df[c_tagged_simple].apply(extract_tagged_users).tolist()
     else:
+        # If not found, look for flattened columns from a JSON/API scrape
+        tagged_user_cols = sorted([
+            c for c in df.columns if re.match(r"taggedUsers/\d+/username", c)
+        ])
+        if tagged_user_cols:
+            # For each row, gather all non-null usernames from the identified columns
+            for _, row in df.iterrows():
+                users = [
+                    str(user)
+                    for user in row[tagged_user_cols].values
+                    if pd.notna(user) and str(user).strip()
+                ]
+                tagged_users_list.append(sorted(list(set(users))))
+        
+    # If tagged_users_list is still empty, ensure it has the correct number of empty lists
+    if not tagged_users_list:
         out["tagged_users"] = [[] for _ in range(len(df))]
+    else:
+        # Pad the list if its length doesn't match the dataframe
+        # This can happen if only some rows had tagged users
+        if len(tagged_users_list) != len(df):
+            # Fallback to empty lists if length mismatch
+            out["tagged_users"] = [[] for _ in range(len(df))]
+        else:
+            out["tagged_users"] = tagged_users_list
 
     out["image_ref"] = df[c_img].fillna("").astype(str) if c_img else ""
 
