@@ -939,14 +939,15 @@ class OSINTCleanGUI(tk.Tk):
             tree.heading(c, text=h)
             tree.column(c, width=w, anchor="w")
 
-        right.rowconfigure(0, weight=1)  # Make the first row (image) expandable
+        right.rowconfigure(0, weight=1)  # Give image and details equal weight
+        right.rowconfigure(1, weight=1)
         right.columnconfigure(0, weight=1)
 
         preview_label = tk.Label(right, bg="#101620", fg="#E5F0FF", text="No image selected")
         preview_label.grid(row=0, column=0, sticky="nsew")
 
-        details = tk.Text(right, height=8, bg="#050910", fg="#E5F0FF", insertbackground="#E5F0FF", wrap="word")
-        details.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        details = tk.Text(right, bg="#050910", fg="#E5F0FF", insertbackground="#E5F0FF", wrap="word")
+        details.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
 
         for _, r in df.iterrows():
             img_ref = str(r.get("image_ref", "")).strip()
