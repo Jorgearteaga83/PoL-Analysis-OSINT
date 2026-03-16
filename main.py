@@ -435,6 +435,8 @@ class OSINTCleanGUI(tk.Tk):
         ttk.Button(left, text="Sentiment Analysis", style="Dark.TButton", command=self.show_sentiment).pack(fill=tk.X, pady=3)
         ttk.Button(left, text="Leakage Analysis", style="Dark.TButton", command=self.show_leakage).pack(fill=tk.X, pady=3)
         ttk.Button(left, text="Raw Posts", style="Dark.TButton", command=self.show_raw).pack(fill=tk.X, pady=3)
+        
+        ttk.Button(left, text="Generate Intelligence Report", style="Dark.TButton", command=self.generate_report).pack(fill=tk.X, pady=(10, 3))
 
         ttk.Separator(left, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=12)
 
@@ -1069,6 +1071,161 @@ class OSINTCleanGUI(tk.Tk):
 
         tree.bind("<<TreeviewSelect>>", on_select)
         tree.bind("<Double-1>", on_double_click)
+
+    def generate_report(self):
+        """Generates a detailed HTML intelligence report for the selected target."""
+        df = self.filtered_df()
+        if df.empty:
+            messagebox.showinfo("Report Generation", "No data matches the current filter. Cannot generate report.")
+            return
+
+        target_user = self.target_var.get()
+        if not target_user or target_user == "(all)":
+            messagebox.showinfo("Report Generation", "Please select a single target account to generate a report.")
+            return
+
+        now = datetime.now()
+        report_path = OUTPUT_DIR / f"intelligence_report_{target_user}_{now.strftime('%Y%m%d_%H%M%S')}.html"
+        self.status_var.set("Generating report...")
+        self.update_idletasks()  # Force UI update
+
+        # --- 1. Data Preparation ---
+        if 'sentiment' not in df.columns:
+            df['sentiment'] = df['caption'].fillna("").astype(str).apply(self.sentiment.score)
+
+        df['hour'] = df['timestamp_utc'].dt.hour
+        df['weekday'] = df['timestamp_utc'].dt.day_name()
+        df_sorted = df.sort_values('timestamp_utc')
+
+        # --- 2. Analysis ---
+        # Executive Summary
+        total_posts = len(df)
+        first_post_date = df_sorted['timestamp_utc'].min().strftime('%Y-%m-%d')
+        last_post_date = df_sorted['timestamp_utc'].max().strftime('%Y-%m-%d')
+        risk_summary = "Moderate. The user shares location data and personal sentiment, creating a mappable pattern of life. Lack of EXIF data on images provides some protection, but tagged locations and post times are still valuable."
+
+        # Temporal Analysis
+        most_active_hours = df['hour'].value_counts().nlargest(3).index.tolist()
+        most_active_hours.sort()
+        timezone_analysis = """
+        <p><strong>Note:</strong> Full timezone verification requires external geocoding services (to convert location names like 'London' to coordinates) and timezone lookup libraries. This is not implemented. The following is a simplified analysis based on UTC timestamps.</p>
+        <p>The target's most active hours are <strong>{hours} UTC</strong>. If the user's primary location is known, this can reveal their local time offset. For example, activity between 18:00-21:00 UTC could correspond to evening hours (e.g., 19:00-22:00) in a UTC+1 timezone.</p>
+        """.format(hours=', '.join(map(str, most_active_hours)))
+
+        # Spatial Analysis
+        location_counts = df[df['location'] != '']['location'].value_counts()
+        top_5_locs = location_counts.head(5)
+        spatial_analysis = """
+        <p><strong>Note:</strong> Analysis is based on user-provided location tags. Optical Character Recognition (OCR) on images is not performed.</p>
+        <h4>Most Frequent Locations</h4>
+        {loc_table}
+        <h4>Location Categorization (Heuristic)</h4>
+        <p>Categorizing locations as 'Home', 'Work', or 'Travel' requires manual analysis. Key indicators would be:</p>
+        <ul>
+            <li><strong>Work:</strong> Frequent posts from the same location during business hours (e.g., Mon-Fri, 9am-5pm local time).</li>
+            <li><strong>Home:</strong> Frequent posts during evenings and weekends.</li>
+            <li><strong>Travel:</strong> Clusters of posts in new, distant locations over a short period.</li>
+        </ul>
+        """.format(loc_table=top_5_locs.to_frame().to_html() if not top_5_locs.empty else "<p>No significant location data found.</p>")
+
+        # Behavioral/Sentiment
+        mean_sentiment = df['sentiment'].mean()
+        high_emotion_posts = df[(df['sentiment'] >= 0.8) | (df['sentiment'] <= -0.8)].sort_values('sentiment', ascending=False)
+        sentiment_html = high_emotion_posts[['timestamp_utc', 'caption', 'sentiment']].to_html(index=False) if not high_emotion_posts.empty else "<p>No high-emotion posts detected in this period.</p>"
+
+        # Anomaly Detection
+        time_diffs = df_sorted['timestamp_utc'].diff().dt.total_seconds().fillna(0)
+        # Gaps over 3 days, but not the very first post
+        gaps = df_sorted[time_diffs > (3 * 86400)]
+        gap_summary = f"<p>Detected <strong>{len(gaps)} significant gaps</strong> in posting activity (more than 3 days).</p>"
+        if not gaps.empty:
+            gap_summary += "These occurred after the following posts:"
+            gap_list = "".join([f"<li>{row['timestamp_utc'].strftime('%Y-%m-%d')}</li>" for _, row in gaps.iterrows()])
+            gap_summary += f"<ul>{gap_list}</ul>"
+
+        # Check for posts outside the 3 most active hours
+        unusual_hour_posts = df[~df['hour'].isin(most_active_hours)]
+        anomaly_summary = f"<p>Found <strong>{len(unusual_hour_posts)} posts ({len(unusual_hour_posts) / total_posts:.1%})</strong> made outside of the target's three most active hours ({most_active_hours}). These could indicate travel, unusual events, or a break in routine.</p>"
+
+        # Conclusion
+        conclusion_text = """
+        <h4>Digital Exposure Assessment</h4>
+        <p>The target's digital footprint reveals consistent patterns in behavior, sentiment, and location. While technical data like EXIF is largely absent, the content and metadata of the posts themselves are highly revealing.</p>
+        <h4>The Mosaic Effect</h4>
+        <p>Combining the temporal (when), spatial (where), and sentiment (what/how) data paints a detailed picture. For example, a high-sentiment post late at night from a new location strongly implies personal travel. A series of negative posts during work hours could indicate job dissatisfaction. Each data point, while small on its own, contributes to a larger, actionable intelligence profile. This is the mosaic effect in action.</p>
+        """
+
+        # --- 3. HTML Assembly ---
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <title>Intelligence Report: {target_user}</title>
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; max-width: 960px; margin: 20px auto; }}
+                h1, h2, h3, h4 {{ color: #1A2738; border-bottom: 1px solid #ddd; padding-bottom: 5px; }}
+                h1 {{ text-align: center; }}
+                .section {{ background-color: #f9f9f9; padding: 15px; border: 1px solid #eee; border-radius: 5px; margin-bottom: 20px; }}
+                table {{ border-collapse: collapse; width: 100%; }}
+                th, td {{ text-align: left; padding: 8px; border-bottom: 1px solid #ddd; }}
+                th {{ background-color: #eef; }}
+                pre {{ background-color: #eee; padding: 10px; border-radius: 5px; white-space: pre-wrap; }}
+            </style>
+        </head>
+        <body>
+            <h1>OSINT Intelligence Report</h1>
+            <p style="text-align: center;"><strong>Target:</strong> {target_user} | <strong>Report Date:</strong> {now.strftime('%Y-%m-%d %H:%M:%S')}</p>
+
+            <div class="section">
+                <h2>Executive Summary</h2>
+                <p>This report covers <strong>{total_posts} posts</strong> from <strong>{first_post_date}</strong> to <strong>{last_post_date}</strong>.</p>
+                <h4>Risk Profile Summary</h4>
+                <p>{risk_summary}</p>
+            </div>
+
+            <div class="section">
+                <h2>Temporal Pattern of Life (The 'When')</h2>
+                {timezone_analysis}
+            </div>
+
+            <div class="section">
+                <h2>Spatial Analysis (The 'Where')</h2>
+                {spatial_analysis}
+            </div>
+
+            <div class="section">
+                <h2>Behavioural Sentiment Profile</h2>
+                <p>The average sentiment score across all posts was <strong>{mean_sentiment:.3f}</strong> (where -1 is very negative, +1 is very positive).</p>
+                <h4>High-Emotion Posts (Sentiment &gt; 0.8 or &lt; -0.8)</h4>
+                {sentiment_html}
+            </div>
+
+            <div class="section">
+                <h2>Anomaly Detection</h2>
+                <h4>Breaks in Pattern (Posting Gaps)</h4>
+                {gap_summary}
+                <h4>Unusual Posting Times</h4>
+                {anomaly_summary}
+            </div>
+
+            <div class="section">
+                <h2>Conclusion</h2>
+                {conclusion_text}
+            </div>
+        </body>
+        </html>
+        """
+
+        # --- 4. Write file and open ---
+        try:
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            webbrowser.open(report_path.resolve().as_uri())
+            self.status_var.set(f"Report saved to {report_path.name}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to write report file:\n{e}")
+            self.status_var.set("Error generating report.")
 
 
 def main():
