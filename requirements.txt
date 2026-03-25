@@ -3,3 +3,6 @@ Pillow
 openpyxl
 matplotlib
 vaderSentiment
+networkx
+reverse_geocoder
+timezonefinder

@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Optional, Union
+import base64
+from io import BytesIO
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -23,10 +25,16 @@ try:
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
     import matplotlib.dates as mdates
+    
+    # New imports for advanced analysis
+    import networkx as nx
+    import reverse_geocoder as rg
+    from timezonefinder import TimezoneFinder
+
 except ImportError as e:
     root = tk.Tk()
     root.withdraw()
-    messagebox.showerror("Missing Libraries", f"Required library missing: {e}\n\nPlease run:\npip install pandas Pillow openpyxl matplotlib")
+    messagebox.showerror("Missing Libraries", f"Required library missing: {e}\n\nPlease run:\npip install pandas Pillow openpyxl matplotlib networkx reverse_geocoder timezonefinder")
     raise SystemExit
 
 
@@ -216,9 +224,6 @@ def extract_exif(path: Path):
 def normalize_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
     """
     Harmonise heterogeneous CSV/XLSX schemas into a consistent OSINT analysis table.
-    Output schema:
-        post_id, username, timestamp_utc, caption, display_url, post_url, location,
-        tagged_users(list[str]), image_ref
     """
     df = df_raw.copy()
     out = pd.DataFrame()
@@ -239,53 +244,163 @@ def normalize_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
     out["display_url"] = df[c_url].fillna("") if c_url else ""
     out["post_url"] = df[c_posturl].fillna("") if c_posturl else ""
     out["location"] = df[c_loc].fillna("") if c_loc else ""
-
-    # --- Tagged Users (flexible extraction) ---
-    # This handles both a single column with JSON/list AND flattened columns
-    # like 'taggedUsers/0/username', 'taggedUsers/1/username', etc.
-    tagged_users_list = []
-    
-    # First, check for a simple, pre-parsed column
-    c_tagged_simple = best_col(df, ["tagged_users", "taggedUsers", "userTags"])
-    if c_tagged_simple:
-        tagged_users_list = df[c_tagged_simple].apply(extract_tagged_users).tolist()
-    else:
-        # If not found, look for flattened columns from a JSON/API scrape
-        tagged_user_cols = sorted([
-            c for c in df.columns if re.match(r"taggedUsers/\d+/username", c)
-        ])
-        if tagged_user_cols:
-            # For each row, gather all non-null usernames from the identified columns
-            for _, row in df.iterrows():
-                users = [
-                    str(user)
-                    for user in row[tagged_user_cols].values
-                    if pd.notna(user) and str(user).strip()
-                ]
-                tagged_users_list.append(sorted(list(set(users))))
-        
-    # If tagged_users_list is still empty, ensure it has the correct number of empty lists
-    if not tagged_users_list:
-        out["tagged_users"] = [[] for _ in range(len(df))]
-    else:
-        # Pad the list if its length doesn't match the dataframe
-        # This can happen if only some rows had tagged users
-        if len(tagged_users_list) != len(df):
-            # Fallback to empty lists if length mismatch
-            out["tagged_users"] = [[] for _ in range(len(df))]
-        else:
-            out["tagged_users"] = tagged_users_list
-
     out["image_ref"] = df[c_img].fillna("").astype(str) if c_img else ""
+
+    # --- NEW: Associated Entities (for SNA) ---
+    all_entities = [[] for _ in range(len(df))]
+    
+    # Regex to find columns related to tagged users or mentions
+    mention_cols = [c for c in df.columns if re.search(r'.*taggedUsers.*username.*|mentions/\d+', c, re.IGNORECASE)]
+    
+    # Also include standard columns that might contain user tags
+    for simple_col_name in ["tagged_users", "taggedUsers", "userTags", "mentions"]:
+        simple_col = best_col(df, [simple_col_name])
+        if simple_col and simple_col not in mention_cols:
+            mention_cols.append(simple_col)
+
+    for i, row in df.iterrows():
+        row_entities = set()
+        for col in mention_cols:
+            cell_val = row[col]
+            if pd.notna(cell_val):
+                # The existing 'extract_tagged_users' is robust enough to handle various formats
+                extracted = extract_tagged_users(cell_val)
+                for user in extracted:
+                    row_entities.add(user)
+        all_entities[i] = sorted(list(row_entities))
+
+    out["associated_entities"] = all_entities
 
     # cleanup
     out["username"] = out["username"].fillna("unknown").astype(str).str.strip()
     out["post_id"] = out["post_id"].fillna("").astype(str).str.strip()
+    
+    out.rename(columns={'tagged_users': 'associated_entities'}, inplace=True)
+
 
     out = out[out["post_id"] != ""]
     out = out[out["username"] != "unknown"]
 
     return out.reset_index(drop=True)
+
+# =========================================================
+# NEW: Offline Geocoding & Timezone Engine
+# =========================================================
+tf = TimezoneFinder()
+
+def infer_location_data(lat: Optional[float], lon: Optional[float], location_string: Optional[str]) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Offline-only location and timezone inference.
+    Returns (City, Country, Timezone).
+    """
+    if lat is not None and lon is not None:
+        try:
+            # reverse_geocoder is offline, uses a local city database
+            results = rg.search((lat, lon), mode=1)
+            if results:
+                location = results[0]
+                city = location.get('name')
+                country = location.get('country')
+                
+                # timezonefinder is offline
+                timezone = tf.timezone_at(lng=lon, lat=lat)
+                
+                return city, country, timezone
+        except Exception:
+            return None, None, None
+    
+    # If only a string is available, don't geocode to maintain OPSEC
+    if location_string:
+        return location_string, None, None # Note the location name without geocoding
+        
+    return None, None, None
+
+# =========================================================
+# NEW: Heuristic NLP Location Categorization
+# =========================================================
+def categorize_location(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Assigns location categories (Work, Home, Travel) based on keywords and time.
+    """
+    df_out = df.copy()
+    
+    # Define keyword lexicons
+    lexicons = {
+        "Work": ["office", "grind", "meeting", "work", "job", "desk", "colleagues"],
+        "Home": ["couch", "living room", "neighborhood", "home", "relaxing", "chilling", "sofa"],
+        "Travel": ["airport", "vacation", "explore", "travel", "holiday", "sightseeing", "tourist"]
+    }
+    
+    # Default category is unassigned
+    df_out['location_category'] = "Uncategorized"
+    
+    # This is a simplified heuristic. A real system would need more complex logic.
+    for category, keywords in lexicons.items():
+        # Create a regex pattern for the keywords
+        pattern = '|'.join(keywords)
+        # Find rows where the caption matches the keyword pattern
+        mask = df_out['caption'].str.contains(pattern, case=False, na=False)
+        df_out.loc[mask, 'location_category'] = f"Assumed: {category}"
+
+    return df_out
+
+# =========================================================
+# NEW: Social Network Analysis (SNA) Module
+# =========================================================
+def generate_sna_graph(df: pd.DataFrame, target_user: str, output_dir: Path) -> Optional[Path]:
+    """
+    Generates a social network graph and saves it as a PNG.
+    """
+    if 'associated_entities' not in df.columns:
+        return None
+
+    G = nx.Graph()
+    G.add_node(target_user, size=50, color='red') # Central node
+
+    edge_weights = {}
+    for _, row in df.iterrows():
+        entities = row['associated_entities']
+        if not isinstance(entities, list):
+            continue
+        for entity in entities:
+            if entity == target_user:
+                continue
+            
+            # Add node if it doesn't exist
+            if not G.has_node(entity):
+                G.add_node(entity, size=10, color='skyblue')
+
+            # Update edge weight
+            edge = tuple(sorted((target_user, entity)))
+            edge_weights[edge] = edge_weights.get(edge, 0) + 1
+
+    for edge, weight in edge_weights.items():
+        G.add_edge(edge[0], edge[1], weight=weight)
+
+    if len(G.nodes) <= 1:
+        return None # No network to draw
+
+    plt.figure(figsize=(12, 12))
+    pos = nx.spring_layout(G, k=0.5, iterations=50)
+    
+    node_sizes = [d['size']*20 for n, d in G.nodes(data=True)]
+    node_colors = [d['color'] for n, d in G.nodes(data=True)]
+    
+    nx.draw(G, pos, with_labels=True, node_size=node_sizes, node_color=node_colors, font_size=10, font_weight='bold')
+    
+    edge_labels = nx.get_edge_attributes(G, 'weight')
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
+
+    plt.title(f"Social Network Analysis for {target_user}")
+    
+    sna_path = output_dir / f"sna_{target_user}.png"
+    try:
+        plt.savefig(sna_path, format="PNG", bbox_inches="tight")
+        plt.close()
+        return sna_path
+    except Exception:
+        plt.close()
+        return None
 
 
 # =========================================================
@@ -602,7 +717,7 @@ class OSINTCleanGUI(tk.Tk):
 
         total_posts = len(df)
         loc_posts = int((df["location"].astype(str).str.strip() != "").sum())
-        tag_posts = int(df["tagged_users"].apply(lambda x: len(x) if isinstance(x, list) else 0).gt(0).sum())
+        tag_posts = int(df["associated_entities"].apply(lambda x: len(x) if isinstance(x, list) else 0).gt(0).sum())
 
         info = ttk.Label(
             self.content_frame,
@@ -613,13 +728,13 @@ class OSINTCleanGUI(tk.Tk):
         info.pack(anchor="w", pady=(0, 10))
 
         tree = self.make_tree(
-            columns=["timestamp_utc", "username", "location", "tagged_users", "caption", "display_url"],
-            headings=["Timestamp (UTC)", "User", "Location", "Tagged users", "Caption", "displayUrl"],
+            columns=["timestamp_utc", "username", "location", "associated_entities", "caption", "display_url"],
+            headings=["Timestamp (UTC)", "User", "Location", "Associated Entities", "Caption", "displayUrl"],
             widths=[180, 140, 200, 240, 600, 350],
         )
 
         for _, r in df.head(400).iterrows():
-            tagged = ", ".join(r["tagged_users"]) if isinstance(r["tagged_users"], list) else ""
+            tagged = ", ".join(r["associated_entities"]) if isinstance(r["associated_entities"], list) else ""
             tree.insert(
                 "",
                 tk.END,
@@ -1074,8 +1189,8 @@ class OSINTCleanGUI(tk.Tk):
 
     def generate_report(self):
         """Generates a detailed HTML intelligence report for the selected target."""
-        df = self.filtered_df()
-        if df.empty:
+        df_filtered = self.filtered_df()
+        if df_filtered.empty:
             messagebox.showinfo("Report Generation", "No data matches the current filter. Cannot generate report.")
             return
 
@@ -1087,73 +1202,127 @@ class OSINTCleanGUI(tk.Tk):
         now = datetime.now()
         report_path = OUTPUT_DIR / f"intelligence_report_{target_user}_{now.strftime('%Y%m%d_%H%M%S')}.html"
         self.status_var.set("Generating report...")
-        self.update_idletasks()  # Force UI update
+        self.update_idletasks()
 
-        # --- 1. Data Preparation ---
+        # --- 1. Data Enrichment ---
+        df = df_filtered.copy()
+        
+        # Sentiment
         if 'sentiment' not in df.columns:
             df['sentiment'] = df['caption'].fillna("").astype(str).apply(self.sentiment.score)
-
+        
+        # Temporal features
         df['hour'] = df['timestamp_utc'].dt.hour
         df['weekday'] = df['timestamp_utc'].dt.day_name()
-        df_sorted = df.sort_values('timestamp_utc')
+        df_sorted = df.sort_values('timestamp_utc').reset_index(drop=True)
 
-        # --- 2. Analysis ---
+        # Location features
+        # This part is illustrative. A full implementation would integrate EXIF data from show_leakage.
+        # For this refactoring, we'll assume lat/lon might be in the original data.
+        df_sorted['inferred_city'] = None
+        df_sorted['inferred_country'] = None
+        df_sorted['inferred_timezone'] = None
+        if best_col(df_sorted, ['lat', 'latitude']) and best_col(df_sorted, ['lon', 'longitude']):
+            c_lat = best_col(df_sorted, ['lat', 'latitude'])
+            c_lon = best_col(df_sorted, ['lon', 'longitude'])
+            loc_data = df_sorted.apply(lambda row: infer_location_data(row[c_lat], row[c_lon], row['location']), axis=1)
+            loc_df = pd.DataFrame(loc_data.tolist(), index=df_sorted.index, columns=['inferred_city', 'inferred_country', 'inferred_timezone'])
+            df_sorted.update(loc_df)
+
+        # Heuristic Categorization
+        df_sorted = categorize_location(df_sorted)
+
+        # --- 2. Analysis Modules ---
         # Executive Summary
-        total_posts = len(df)
+        total_posts = len(df_sorted)
         first_post_date = df_sorted['timestamp_utc'].min().strftime('%Y-%m-%d')
         last_post_date = df_sorted['timestamp_utc'].max().strftime('%Y-%m-%d')
-        risk_summary = "Moderate. The user shares location data and personal sentiment, creating a mappable pattern of life. Lack of EXIF data on images provides some protection, but tagged locations and post times are still valuable."
-
-        # Temporal Analysis
-        most_active_hours = df['hour'].value_counts().nlargest(3).index.tolist()
-        most_active_hours.sort()
-        timezone_analysis = """
-        <p><strong>Note:</strong> Full timezone verification requires external geocoding services (to convert location names like 'London' to coordinates) and timezone lookup libraries. This is not implemented. The following is a simplified analysis based on UTC timestamps.</p>
-        <p>The target's most active hours are <strong>{hours} UTC</strong>. If the user's primary location is known, this can reveal their local time offset. For example, activity between 18:00-21:00 UTC could correspond to evening hours (e.g., 19:00-22:00) in a UTC+1 timezone.</p>
-        """.format(hours=', '.join(map(str, most_active_hours)))
 
         # Spatial Analysis
-        location_counts = df[df['location'] != '']['location'].value_counts()
-        top_5_locs = location_counts.head(5)
-        spatial_analysis = """
-        <p><strong>Note:</strong> Analysis is based on user-provided location tags. Optical Character Recognition (OCR) on images is not performed.</p>
-        <h4>Most Frequent Locations</h4>
-        {loc_table}
-        <h4>Location Categorization (Heuristic)</h4>
-        <p>Categorizing locations as 'Home', 'Work', or 'Travel' requires manual analysis. Key indicators would be:</p>
-        <ul>
-            <li><strong>Work:</strong> Frequent posts from the same location during business hours (e.g., Mon-Fri, 9am-5pm local time).</li>
-            <li><strong>Home:</strong> Frequent posts during evenings and weekends.</li>
-            <li><strong>Travel:</strong> Clusters of posts in new, distant locations over a short period.</li>
-        </ul>
-        """.format(loc_table=top_5_locs.to_frame().to_html() if not top_5_locs.empty else "<p>No significant location data found.</p>")
+        location_counts = df_sorted[df_sorted['location'] != '']['location'].value_counts().head(10)
+        loc_analysis_html = "<h4>Most Frequent Locations</h4>"
+        if not location_counts.empty:
+            loc_table = location_counts.to_frame().to_html()
+            loc_analysis_html += loc_table
+        else:
+            loc_analysis_html += "<p>No significant location data found.</p>"
+        
+        # Heuristic categorization table
+        cat_counts = df_sorted['location_category'].value_counts()
+        cat_counts = cat_counts[cat_counts.index != 'Uncategorized']
+        if not cat_counts.empty:
+            loc_analysis_html += "<h4>Heuristic Location Categories</h4>"
+            loc_analysis_html += cat_counts.to_frame().to_html()
 
-        # Behavioral/Sentiment
-        mean_sentiment = df['sentiment'].mean()
-        high_emotion_posts = df[(df['sentiment'] >= 0.8) | (df['sentiment'] <= -0.8)].sort_values('sentiment', ascending=False)
-        sentiment_html = high_emotion_posts[['timestamp_utc', 'caption', 'sentiment']].to_html(index=False) if not high_emotion_posts.empty else "<p>No high-emotion posts detected in this period.</p>"
+        # SNA
+        sna_path = generate_sna_graph(df_sorted, target_user, OUTPUT_DIR)
+        sna_html = "<h3>Social Network Analysis</h3>"
+        if sna_path:
+            try:
+                with open(sna_path, "rb") as f:
+                    encoded_img = base64.b64encode(f.read()).decode('utf-8')
+                sna_html += f'<img src="data:image/png;base64,{encoded_img}" alt="SNA Graph" style="max-width:100%;">'
+                sna_html += "<p>The graph shows entities frequently mentioned or tagged by the target. Edge weight indicates interaction frequency.</p>"
+            except Exception as e:
+                sna_html += f"<p>Could not embed SNA graph: {e}</p>"
+        else:
+            sna_html += "<p>No social network data to display.</p>"
 
         # Anomaly Detection
-        time_diffs = df_sorted['timestamp_utc'].diff().dt.total_seconds().fillna(0)
-        # Gaps over 3 days, but not the very first post
-        gaps = df_sorted[time_diffs > (3 * 86400)]
-        gap_summary = f"<p>Detected <strong>{len(gaps)} significant gaps</strong> in posting activity (more than 3 days).</p>"
-        if not gaps.empty:
-            gap_summary += "These occurred after the following posts:"
-            gap_list = "".join([f"<li>{row['timestamp_utc'].strftime('%Y-%m-%d')}</li>" for _, row in gaps.iterrows()])
-            gap_summary += f"<ul>{gap_list}</ul>"
+        anomalies = []
+        # Travel Anomaly
+        df_sorted['prev_timezone'] = df_sorted['inferred_timezone'].shift(1)
+        travel_anomalies = df_sorted[(df_sorted['inferred_timezone'].notna()) & (df_sorted['prev_timezone'].notna()) & (df_sorted['inferred_timezone'] != df_sorted['prev_timezone'])]
+        for _, row in travel_anomalies.iterrows():
+            anomalies.append(f"<b>Travel Anomaly:</b> Detected travel to {row['inferred_timezone']} on {row['timestamp_utc']:%Y-%m-%d}.")
+        
+        # Mood Drop Anomaly
+        df_sorted['rolling_sentiment'] = df_sorted['sentiment'].rolling(window=5, min_periods=1).mean()
+        mood_drops = df_sorted[(df_sorted['sentiment'] < -0.5) & (df_sorted['rolling_sentiment'].shift(1) > 0)]
+        for _, row in mood_drops.iterrows():
+            anomalies.append(f"<b>Mood Drop:</b> Significant negative sentiment post on {row['timestamp_utc']:%Y-%m-%d} following a period of positive sentiment.")
+        
+        # Routine Disruption (Sleep)
+        # Assumes sleep is 00:00-06:00 local time. Requires timezone.
+        disruptions = df_sorted[df_sorted['inferred_timezone'].notna()]
+        if not disruptions.empty:
+            disruptions['local_time'] = disruptions.apply(lambda row: row['timestamp_utc'].tz_convert(row['inferred_timezone']), axis=1)
+            sleep_posts = disruptions[disruptions['local_time'].dt.hour.between(0, 6)]
+            for _, row in sleep_posts.iterrows():
+                anomalies.append(f"<b>Routine Disruption:</b> Post detected during typical sleep hours at {row['local_time']:%H:%M} local time on {row['local_time']:%Y-%m-%d}.")
 
-        # Check for posts outside the 3 most active hours
-        unusual_hour_posts = df[~df['hour'].isin(most_active_hours)]
-        anomaly_summary = f"<p>Found <strong>{len(unusual_hour_posts)} posts ({len(unusual_hour_posts) / total_posts:.1%})</strong> made outside of the target's three most active hours ({most_active_hours}). These could indicate travel, unusual events, or a break in routine.</p>"
+        anomaly_html = "<h3>Anomaly Detection</h3>"
+        if anomalies:
+            anomaly_html += "<ul>" + "".join([f"<li>{a}</li>" for a in anomalies]) + "</ul>"
+        else:
+            anomaly_html += "<p>No significant anomalies detected in this dataset.</p>"
 
-        # Conclusion
-        conclusion_text = """
-        <h4>Digital Exposure Assessment</h4>
-        <p>The target's digital footprint reveals consistent patterns in behavior, sentiment, and location. While technical data like EXIF is largely absent, the content and metadata of the posts themselves are highly revealing.</p>
-        <h4>The Mosaic Effect</h4>
-        <p>Combining the temporal (when), spatial (where), and sentiment (what/how) data paints a detailed picture. For example, a high-sentiment post late at night from a new location strongly implies personal travel. A series of negative posts during work hours could indicate job dissatisfaction. Each data point, while small on its own, contributes to a larger, actionable intelligence profile. This is the mosaic effect in action.</p>
+        # User Grievances
+        grievances = df_sorted[df_sorted['sentiment'] < -0.5].sort_values('sentiment').head(5)
+        grievance_html = "<h3>User Grievances (Top Negative Posts)</h3>"
+        if not grievances.empty:
+            grievance_html += "<ul>"
+            for _, row in grievances.iterrows():
+                grievance_html += f"<li>({row['sentiment']:.2f}) {row['caption'][:150]}...</li>"
+            grievance_html += "</ul>"
+        else:
+            grievance_html += "<p>No significant negative posts found.</p>"
+
+        # Mosaic Effect Conclusion
+        mosaic_conclusion = """
+        <h3>The Mosaic Effect: Synthesized Intelligence</h3>
+        <p>This section synthesizes the individual analyses into a cohesive narrative.</p>
         """
+        if anomalies:
+            mosaic_conclusion += "<p>The target's pattern of life shows significant disruptions. The detected anomalies, when viewed together, suggest periods of stress, travel, or unusual activity. For instance, a mood drop coinciding with a travel anomaly could indicate stressful travel. These events should be cross-referenced with other intelligence sources.</p>"
+        else:
+            mosaic_conclusion += "<p>The target exhibits a stable and predictable pattern of life. Their activity is consistent, with few deviations from their established routine. This predictability can be used to forecast future behavior.</p>"
+        
+        if not grievances.empty:
+            mosaic_conclusion += "<p>Recurring negative sentiment (grievances) often centers on specific themes. Further analysis of these themes could reveal the target's personal or professional stressors.</p>"
+        
+        if sna_path:
+            mosaic_conclusion += "<p>The social network analysis identifies key individuals in the target's digital life. These individuals represent potential sources of secondary information leakage and are persons of interest for further investigation.</p>"
 
         # --- 3. HTML Assembly ---
         html_content = f"""
@@ -1170,7 +1339,6 @@ class OSINTCleanGUI(tk.Tk):
                 table {{ border-collapse: collapse; width: 100%; }}
                 th, td {{ text-align: left; padding: 8px; border-bottom: 1px solid #ddd; }}
                 th {{ background-color: #eef; }}
-                pre {{ background-color: #eee; padding: 10px; border-radius: 5px; white-space: pre-wrap; }}
             </style>
         </head>
         <body>
@@ -1180,38 +1348,27 @@ class OSINTCleanGUI(tk.Tk):
             <div class="section">
                 <h2>Executive Summary</h2>
                 <p>This report covers <strong>{total_posts} posts</strong> from <strong>{first_post_date}</strong> to <strong>{last_post_date}</strong>.</p>
-                <h4>Risk Profile Summary</h4>
-                <p>{risk_summary}</p>
-            </div>
-
-            <div class="section">
-                <h2>Temporal Pattern of Life (The 'When')</h2>
-                {timezone_analysis}
             </div>
 
             <div class="section">
                 <h2>Spatial Analysis (The 'Where')</h2>
-                {spatial_analysis}
+                {loc_analysis_html}
             </div>
 
             <div class="section">
-                <h2>Behavioural Sentiment Profile</h2>
-                <p>The average sentiment score across all posts was <strong>{mean_sentiment:.3f}</strong> (where -1 is very negative, +1 is very positive).</p>
-                <h4>High-Emotion Posts (Sentiment &gt; 0.8 or &lt; -0.8)</h4>
-                {sentiment_html}
+                <h2>Social Network & Leakage (The 'Who')</h2>
+                {sna_html}
             </div>
 
             <div class="section">
-                <h2>Anomaly Detection</h2>
-                <h4>Breaks in Pattern (Posting Gaps)</h4>
-                {gap_summary}
-                <h4>Unusual Posting Times</h4>
-                {anomaly_summary}
+                <h2>Behavioural & Anomaly Analysis (The 'Why' and 'When')</h2>
+                {anomaly_html}
+                {grievance_html}
             </div>
 
             <div class="section">
                 <h2>Conclusion</h2>
-                {conclusion_text}
+                {mosaic_conclusion}
             </div>
         </body>
         </html>
