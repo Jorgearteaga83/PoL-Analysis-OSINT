@@ -821,6 +821,7 @@ class OSINTCleanGUI(tk.Tk):
         fig1.autofmt_xdate()
         fig1.tight_layout()
         embed_plot_in_tab(fig1, day_frame)
+        plt.close(fig1)
 
         # =================== TAB 2: Posts per Hour ===================
         hour_frame = ttk.Frame(notebook, style="Dark.TFrame", padding=10)
@@ -834,6 +835,7 @@ class OSINTCleanGUI(tk.Tk):
         ax2.set_xticks(list(range(0, 24, 1)))
         fig2.tight_layout()
         embed_plot_in_tab(fig2, hour_frame)
+        plt.close(fig2)
 
         # =================== TAB 3: Posts per Weekday ===================
         weekday_frame = ttk.Frame(notebook, style="Dark.TFrame", padding=10)
@@ -847,6 +849,7 @@ class OSINTCleanGUI(tk.Tk):
         fig3.autofmt_xdate()
         fig3.tight_layout()
         embed_plot_in_tab(fig3, weekday_frame)
+        plt.close(fig3)
 
         # =================== TAB 4: Weekly Pattern of Life Heatmap ===================
         heatmap_frame = ttk.Frame(notebook, style="Dark.TFrame", padding=10)
@@ -872,6 +875,7 @@ class OSINTCleanGUI(tk.Tk):
 
         fig4.tight_layout()
         embed_plot_in_tab(fig4, heatmap_frame)
+        plt.close(fig4)
 
     def show_sentiment(self):
         """
@@ -938,6 +942,7 @@ class OSINTCleanGUI(tk.Tk):
 
         fig.tight_layout()
         self.embed_plot(fig)
+        plt.close(fig)
 
         # Table of scored posts
         ttk.Label(
