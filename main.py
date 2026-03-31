@@ -760,9 +760,10 @@ class OSINTCleanGUI(tk.Tk):
     def show_temporal(self):
         """
         Temporal Analysis:
-          - Posts per day (chart + table) with clear x-axis ticks
+          - Posts per day (chart + table)
           - Posts per hour (bar chart + table)
           - Posts per weekday (bar chart + table)
+          - Weekly Pattern of Life (heatmap)
         """
         df = self.filtered_df()
         self.clear_content()
@@ -783,89 +784,94 @@ class OSINTCleanGUI(tk.Tk):
         df["hour"] = df["timestamp_utc"].dt.hour
         df["weekday"] = df["timestamp_utc"].dt.day_name()
 
+        # --- Data processing ---
         per_day = df.groupby("date")["post_id"].count().reset_index(name="posts").sort_values("date")
         per_hour = df.groupby("hour")["post_id"].count().reset_index(name="posts").sort_values("hour")
-
         weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        per_weekday = (
-            df.groupby("weekday")["post_id"].count().reindex(weekday_order, fill_value=0).reset_index(name="posts")
-        )
+        per_weekday = df.groupby("weekday")["post_id"].count().reindex(weekday_order, fill_value=0).reset_index(name="posts")
 
-        # ---------- Posts per Day (IMPROVED X-AXIS) ----------
-        ttk.Label(
-            self.content_frame,
-            text="Posts per Day",
-            style="Dark.TLabel",
-            font=("Segoe UI", 11, "bold"),
-        ).pack(anchor="w", pady=(0, 5))
+        # --- Create a Notebook for tabs ---
+        style = ttk.Style()
+        style.configure("Dark.TNotebook", background="#050910", borderwidth=0)
+        style.configure("Dark.TNotebook.Tab", background="#1A2738", foreground="#E5F0FF", padding=[8, 4])
+        style.map("Dark.TNotebook.Tab", background=[("selected", "#28406A"), ("active", "#22344A")])
+        notebook = ttk.Notebook(self.content_frame, style="Dark.TNotebook")
+        notebook.pack(fill='both', expand=True)
+
+        # --- Helper for embedding plots in tabs ---
+        def embed_plot_in_tab(fig, parent):
+            canvas = FigureCanvasTkAgg(fig, master=parent)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            return canvas
+            
+        # =================== TAB 1: Posts per Day ===================
+        day_frame = ttk.Frame(notebook, style="Dark.TFrame", padding=10)
+        notebook.add(day_frame, text='Posts per Day')
 
         per_day_plot = per_day.copy()
         per_day_plot["date"] = pd.to_datetime(per_day_plot["date"])
-
-        fig1, ax1 = plt.subplots(figsize=(9, 3.8))
+        fig1, ax1 = plt.subplots(figsize=(9, 4))
         ax1.plot(per_day_plot["date"], per_day_plot["posts"], marker="o")
         ax1.set_title("Posting Frequency Over Time")
         ax1.set_xlabel("Date")
         ax1.set_ylabel("Posts")
-
         ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
         ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-        for label in ax1.get_xticklabels():
-            label.set_rotation(45)
-            label.set_ha("right")
-
+        fig1.autofmt_xdate()
         fig1.tight_layout()
-        self.embed_plot(fig1)
+        embed_plot_in_tab(fig1, day_frame)
 
-        tree1 = self.make_tree(["date", "posts"], ["Date", "Posts"], [180, 120])
-        for _, r in per_day.iterrows():
-            tree1.insert("", tk.END, values=[r["date"], r["posts"]])
-
-        # ---------- Posts per Hour ----------
-        ttk.Label(
-            self.content_frame,
-            text="Posts per Hour",
-            style="Dark.TLabel",
-            font=("Segoe UI", 11, "bold"),
-        ).pack(anchor="w", pady=(12, 5))
-
-        fig2, ax2 = plt.subplots(figsize=(9, 3.2))
+        # =================== TAB 2: Posts per Hour ===================
+        hour_frame = ttk.Frame(notebook, style="Dark.TFrame", padding=10)
+        notebook.add(hour_frame, text='Posts per Hour')
+        
+        fig2, ax2 = plt.subplots(figsize=(9, 4))
         ax2.bar(per_hour["hour"].astype(int), per_hour["posts"].astype(int))
         ax2.set_title("Diurnal Posting Pattern")
         ax2.set_xlabel("Hour of Day (0–23)")
         ax2.set_ylabel("Posts")
         ax2.set_xticks(list(range(0, 24, 1)))
-        for label in ax2.get_xticklabels():
-            label.set_rotation(0)
         fig2.tight_layout()
-        self.embed_plot(fig2)
+        embed_plot_in_tab(fig2, hour_frame)
 
-        tree2 = self.make_tree(["hour", "posts"], ["Hour", "Posts"], [120, 120])
-        for _, r in per_hour.iterrows():
-            tree2.insert("", tk.END, values=[int(r["hour"]), int(r["posts"])])
+        # =================== TAB 3: Posts per Weekday ===================
+        weekday_frame = ttk.Frame(notebook, style="Dark.TFrame", padding=10)
+        notebook.add(weekday_frame, text='Posts per Weekday')
 
-        # ---------- Posts per Weekday ----------
-        ttk.Label(
-            self.content_frame,
-            text="Posts per Weekday",
-            style="Dark.TLabel",
-            font=("Segoe UI", 11, "bold"),
-        ).pack(anchor="w", pady=(12, 5))
-
-        fig3, ax3 = plt.subplots(figsize=(9, 3.2))
+        fig3, ax3 = plt.subplots(figsize=(9, 4))
         ax3.bar(per_weekday["weekday"], per_weekday["posts"])
         ax3.set_title("Weekly Posting Pattern")
         ax3.set_xlabel("Weekday")
         ax3.set_ylabel("Posts")
-        for label in ax3.get_xticklabels():
-            label.set_rotation(25)
-            label.set_ha("right")
+        fig3.autofmt_xdate()
         fig3.tight_layout()
-        self.embed_plot(fig3)
+        embed_plot_in_tab(fig3, weekday_frame)
 
-        tree3 = self.make_tree(["weekday", "posts"], ["Weekday", "Posts"], [180, 120])
-        for _, r in per_weekday.iterrows():
-            tree3.insert("", tk.END, values=[r["weekday"], int(r["posts"])])
+        # =================== TAB 4: Weekly Pattern of Life Heatmap ===================
+        heatmap_frame = ttk.Frame(notebook, style="Dark.TFrame", padding=10)
+        notebook.add(heatmap_frame, text='Pattern of Life Heatmap')
+
+        heatmap_data = pd.crosstab(df['weekday'], df['hour'])
+        heatmap_data = heatmap_data.reindex(columns=range(24), fill_value=0)
+        heatmap_data = heatmap_data.reindex(index=weekday_order, fill_value=0)
+
+        fig4, ax4 = plt.subplots(figsize=(9, 4))
+        im = ax4.imshow(heatmap_data, cmap='YlOrRd', aspect='auto')
+
+        ax4.set_xticks(range(len(heatmap_data.columns)))
+        ax4.set_xticklabels(heatmap_data.columns)
+        ax4.set_yticks(range(len(heatmap_data.index)))
+        ax4.set_yticklabels(heatmap_data.index)
+
+        cbar = ax4.figure.colorbar(im, ax=ax4)
+        cbar.ax.set_ylabel("Activity Density", rotation=-90, va="bottom")
+        ax4.set_title("Weekly Activity Heatmap (Day vs. Hour)")
+        ax4.set_xlabel("Hour of Day")
+        ax4.set_ylabel("Day of Week")
+
+        fig4.tight_layout()
+        embed_plot_in_tab(fig4, heatmap_frame)
 
     def show_sentiment(self):
         """
