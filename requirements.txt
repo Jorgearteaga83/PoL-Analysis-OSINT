@@ -6,3 +6,4 @@ vaderSentiment
 networkx
 reverse_geocoder
 timezonefinder
+pytest
