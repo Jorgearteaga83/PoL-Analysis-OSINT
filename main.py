@@ -1259,11 +1259,22 @@ class OSINTCleanGUI(tk.Tk):
             loc_analysis_html += "<p>No significant location data found.</p>"
         
         # Heuristic categorization table
-        cat_counts = df_sorted['location_category'].value_counts()
-        cat_counts = cat_counts[cat_counts.index != 'Uncategorized']
-        if not cat_counts.empty:
+        cat_data = df_sorted[df_sorted['location_category'] != 'Uncategorized']
+        if not cat_data.empty:
+            def get_unique_locations(s):
+                locs = s.dropna().astype(str)
+                locs = locs[locs.str.strip() != '']
+                return ", ".join(sorted(set(locs)))
+                
+            cat_summary = cat_data.groupby('location_category').agg(
+                count=('location_category', 'count'),
+                associated_locations=('location', get_unique_locations)
+            ).reset_index()
+            
+            cat_summary = cat_summary.sort_values(by='count', ascending=False)
+            
             loc_analysis_html += "<h4>Heuristic Location Categories</h4>"
-            loc_analysis_html += cat_counts.to_frame().to_html()
+            loc_analysis_html += cat_summary.to_html(index=False)
 
         # SNA
         sna_path = generate_sna_graph(df_sorted, target_user, OUTPUT_DIR)
@@ -1326,11 +1337,37 @@ class OSINTCleanGUI(tk.Tk):
         """
         if anomalies:
             mosaic_conclusion += "<p>The target's pattern of life shows significant disruptions. The detected anomalies, when viewed together, suggest periods of stress, travel, or unusual activity. For instance, a mood drop coinciding with a travel anomaly could indicate stressful travel. These events should be cross-referenced with other intelligence sources.</p>"
+            
+            if not travel_anomalies.empty:
+                mosaic_conclusion += "<h4>Travel Anomalies</h4><ul>"
+                for _, row in travel_anomalies.iterrows():
+                    loc = row['location'] if pd.notna(row['location']) and str(row['location']).strip() else 'Unknown'
+                    mosaic_conclusion += f"<li><b>Location:</b> {loc} | <b>Date/Time:</b> {row['timestamp_utc']} | <b>Caption:</b> {str(row['caption'])[:100]}...</li>"
+                mosaic_conclusion += "</ul>"
+                
+            if 'sleep_posts' in locals() and not sleep_posts.empty:
+                mosaic_conclusion += "<h4>Routine Disruptions (Sleep)</h4><ul>"
+                for _, row in sleep_posts.iterrows():
+                    loc = row['location'] if pd.notna(row['location']) and str(row['location']).strip() else 'Unknown'
+                    mosaic_conclusion += f"<li><b>Location:</b> {loc} | <b>Date/Local Time:</b> {row['local_time']:%Y-%m-%d %H:%M} | <b>Caption:</b> {str(row['caption'])[:100]}...</li>"
+                mosaic_conclusion += "</ul>"
+                
+            if not mood_drops.empty:
+                mosaic_conclusion += "<h4>Mood Drops</h4><ul>"
+                for _, row in mood_drops.iterrows():
+                    loc = row['location'] if pd.notna(row['location']) and str(row['location']).strip() else 'Unknown'
+                    mosaic_conclusion += f"<li><b>Location:</b> {loc} | <b>Date/Time:</b> {row['timestamp_utc']} | <b>Caption:</b> {str(row['caption'])[:100]}...</li>"
+                mosaic_conclusion += "</ul>"
         else:
             mosaic_conclusion += "<p>The target exhibits a stable and predictable pattern of life. Their activity is consistent, with few deviations from their established routine. This predictability can be used to forecast future behavior.</p>"
         
         if not grievances.empty:
             mosaic_conclusion += "<p>Recurring negative sentiment (grievances) often centers on specific themes. Further analysis of these themes could reveal the target's personal or professional stressors.</p>"
+            mosaic_conclusion += "<h4>Grievances</h4><ul>"
+            for _, row in grievances.iterrows():
+                loc = row['location'] if pd.notna(row['location']) and str(row['location']).strip() else 'Unknown'
+                mosaic_conclusion += f"<li><b>Location:</b> {loc} | <b>Date/Time:</b> {row['timestamp_utc']} | <b>Caption:</b> {str(row['caption'])[:100]}...</li>"
+            mosaic_conclusion += "</ul>"
         
         if sna_path:
             mosaic_conclusion += "<p>The social network analysis identifies key individuals in the target's digital life. These individuals represent potential sources of secondary information leakage and are persons of interest for further investigation.</p>"
