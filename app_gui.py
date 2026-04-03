@@ -6,6 +6,7 @@ import webbrowser
 import requests
 import tempfile
 import base64
+import textwrap
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -67,12 +68,13 @@ class OSINTCleanGUI(tk.Tk):
         main.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # LEFT PANEL
-        left = ttk.Frame(main, style="Dark.TFrame")
+        left = ttk.Frame(main, style="Dark.TFrame", width=320)
+        left.pack_propagate(False)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 12))
 
         ttk.Button(left, text="Upload dataset", style="Dark.TButton", command=self.upload_dataset).pack(fill=tk.X, pady=(12, 6))
         self.dataset_label = tk.StringVar(value="No dataset loaded.")
-        ttk.Label(left, textvariable=self.dataset_label, style="Dark.TLabel").pack(anchor="w")
+        ttk.Label(left, textvariable=self.dataset_label, style="Dark.TLabel", wraplength=280).pack(anchor="w", fill=tk.X)
 
         self.target_var = tk.StringVar(value="(all)")
         self.target_combo = ttk.Combobox(left, textvariable=self.target_var, values=["(all)"], state="readonly", width=38)
@@ -89,8 +91,8 @@ class OSINTCleanGUI(tk.Tk):
 
         ttk.Separator(left, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=12)
         ttk.Button(left, text="Overview", style="Dark.TButton", command=self.show_overview).pack(fill=tk.X, pady=3)
-        ttk.Button(left, text="Temporal", style="Dark.TButton", command=self.show_temporal).pack(fill=tk.X, pady=3)
-        ttk.Button(left, text="Sentiment", style="Dark.TButton", command=self.show_sentiment).pack(fill=tk.X, pady=3)
+        ttk.Button(left, text="Temporal Analysis", style="Dark.TButton", command=self.show_temporal).pack(fill=tk.X, pady=3)
+        ttk.Button(left, text="Sentiment Analysis", style="Dark.TButton", command=self.show_sentiment).pack(fill=tk.X, pady=3)
         ttk.Button(left, text="Leakage", style="Dark.TButton", command=self.show_leakage).pack(fill=tk.X, pady=3)
         ttk.Button(left, text="Raw Posts", style="Dark.TButton", command=self.show_raw).pack(fill=tk.X, pady=3)
         ttk.Button(left, text="Generate Intelligence Report", style="Dark.TButton", command=self.generate_report).pack(fill=tk.X, pady=(10, 3))
@@ -151,7 +153,10 @@ class OSINTCleanGUI(tk.Tk):
         users = sorted(set(self.df_all["username"].astype(str)))
         self.target_combo["values"] = ["(all)"] + users
         self.target_var.set("(all)")
-        self.dataset_label.set(f"Loaded: {filename}\nRows: {len(self.df_all):,}")
+        
+        wrapped_filename = "\n".join(textwrap.wrap(filename, width=35, break_long_words=True))
+        self.dataset_label.set(f"Loaded: \n{wrapped_filename}\nRows: {len(self.df_all):,}")
+        
         self.status_var.set("Dataset loaded successfully.")
         self.title_label.config(text="Dataset loaded. Select an analysis.")
         self.clear_content()
@@ -415,48 +420,101 @@ class OSINTCleanGUI(tk.Tk):
 
         tree_frame = ttk.Frame(left, style="Dark.TFrame")
         tree_frame.pack(fill=tk.BOTH, expand=True)
-        tree = ttk.Treeview(tree_frame, columns=["post_id", "username", "local_image", "exif", "gps", "lat", "lon", "display_url"], show="headings", style="Dark.Treeview")
+
+        tree = ttk.Treeview(
+            tree_frame,
+            columns=["post_id", "username", "local_image", "exif", "gps", "lat", "lon", "display_url"],
+            show="headings",
+            style="Dark.Treeview",
+        )
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=vsb.set)
+
         tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
-        tree_frame.rowconfigure(0, weight=1); tree_frame.columnconfigure(0, weight=1)
 
-        cols = [("post_id", "Post ID", 140), ("username", "User", 120), ("local_image", "Local image", 240), ("exif", "EXIF", 60), ("gps", "GPS", 60), ("lat", "Lat", 90), ("lon", "Lon", 90), ("display_url", "displayUrl", 320)]
-        for c, h, w in cols: tree.heading(c, text=h); tree.column(c, width=w, anchor="w")
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
 
-        right.rowconfigure(0, weight=1); right.rowconfigure(1, weight=1); right.columnconfigure(0, weight=1)
+        cols = [
+            ("post_id", "Post ID", 140),
+            ("username", "User", 120),
+            ("local_image", "Local image", 240),
+            ("exif", "EXIF", 60),
+            ("gps", "GPS", 60),
+            ("lat", "Lat", 90),
+            ("lon", "Lon", 90),
+            ("display_url", "displayUrl", 320),
+        ]
+        for c, h, w in cols:
+            tree.heading(c, text=h)
+            tree.column(c, width=w, anchor="w")
+
+        right.rowconfigure(0, weight=1)  # Give image and details equal weight
+        right.rowconfigure(1, weight=1)
+        right.columnconfigure(0, weight=1)
+
         preview_label = tk.Label(right, bg="#101620", fg="#E5F0FF", text="No image selected")
         preview_label.grid(row=0, column=0, sticky="nsew")
+
         details = tk.Text(right, bg="#050910", fg="#E5F0FF", insertbackground="#E5F0FF", wrap="word")
         details.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
 
         for _, r in df.iterrows():
             img_ref = str(r.get("image_ref", "")).strip()
             local_img_path = ""
+
             if img_ref:
                 p = Path(img_ref)
-                if p.exists(): local_img_path = str(p)
+                if p.exists():
+                    local_img_path = str(p)
                 else:
-                    for c in [DATA_DIR/img_ref, DATA_DIR/"images"/img_ref, DATA_DIR/r["username"]/img_ref, DATA_DIR/r["username"]/"images"/img_ref]:
-                        if c.exists(): local_img_path = str(c.resolve()); break
+                    candidates = [
+                        DATA_DIR / img_ref,
+                        DATA_DIR / "images" / img_ref,
+                        DATA_DIR / r["username"] / img_ref,
+                        DATA_DIR / r["username"] / "images" / img_ref,
+                    ]
+                    for c in candidates:
+                        if c.exists():
+                            local_img_path = str(c.resolve())
+                            break
 
-            exif_present = gps_present = False
+            exif_present = False
+            gps_present = False
             lat = lon = None
+
             if local_img_path:
                 exif_present, gps_present, lat, lon = extract_exif(Path(local_img_path))
+
                 try:
                     user_dir = OUTPUT_IMAGES_DIR / str(r["username"])
                     user_dir.mkdir(parents=True, exist_ok=True)
                     dst = user_dir / Path(local_img_path).name
-                    if not dst.exists(): shutil.copy2(local_img_path, dst)
-                except Exception: pass
+                    if not dst.exists():
+                        shutil.copy2(local_img_path, dst)
+                except Exception:
+                    pass
 
-            tree.insert("", tk.END, values=[r["post_id"], r["username"], local_img_path, "Yes" if exif_present else "No", "Yes" if gps_present else "No", "" if lat is None else f"{lat:.6f}", "" if lon is None else f"{lon:.6f}", r["display_url"]])
+            tree.insert(
+                "",
+                tk.END,
+                values=[
+                    r["post_id"],
+                    r["username"],
+                    local_img_path,
+                    "Yes" if exif_present else "No",
+                    "Yes" if gps_present else "No",
+                    "" if lat is None else f"{lat:.6f}",
+                    "" if lon is None else f"{lon:.6f}",
+                    r["display_url"],
+                ],
+            )
 
         def on_select(_event):
             sel = tree.selection()
-            if not sel: return
+            if not sel:
+                return
             vals = tree.item(sel[0], "values")
             local_img = str(vals[2]).strip()
             url = str(vals[-1]).strip()
@@ -477,28 +535,51 @@ class OSINTCleanGUI(tk.Tk):
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
                             tmp_file.write(response.content)
                             tmp_path = Path(tmp_file.name)
+                        
                         exif_present, gps_present, lat, lon = extract_exif(tmp_path)
                         tree.set(sel[0], "exif", "Yes" if exif_present else "No")
                         tree.set(sel[0], "gps", "Yes" if gps_present else "No")
                         tree.set(sel[0], "lat", "" if lat is None else f"{lat:.6f}")
                         tree.set(sel[0], "lon", "" if lon is None else f"{lon:.6f}")
+
                         img = Image.open(tmp_path)
                         img.thumbnail((520, 520))
                         self.preview_img = ImageTk.PhotoImage(img)
                         preview_label.config(image=self.preview_img, text="")
                         local_img = str(tmp_path)
+                    elif response.status_code == 403:
+                        preview_label.config(image="", text="Image URL expired or forbidden.")
                     else:
                         preview_label.config(image="", text=f"Failed to download.\nStatus: {response.status_code}")
-                except Exception as e:
+                except requests.exceptions.RequestException as e:
                     preview_label.config(image="", text=f"Download error:\n{e}")
+                except Exception:
+                    preview_label.config(image="", text="Image processing failed.")
             else:
                 preview_label.config(image="", text="No local image or URL.")
 
             details.delete("1.0", tk.END)
-            details.insert("1.0", f"Post ID: {vals[0]}\nUser: {vals[1]}\nLocal image: {local_img or '(none)'}\nEXIF: {vals[3]}\nGPS: {vals[4]}\nLat: {vals[5]}\nLon: {vals[6]}\ndisplayUrl: {url}\n")
+            details.insert(
+                "1.0",
+                f"Post ID: {vals[0]}\n"
+                f"User: {vals[1]}\n"
+                f"Local image: {local_img or '(none)'}\n"
+                f"EXIF: {vals[3]}\n"
+                f"GPS: {vals[4]}\n"
+                f"Lat: {vals[5]}\n"
+                f"Lon: {vals[6]}\n"
+                f"displayUrl: {url}\n",
+            )
+
+        def on_double_click(_event):
+            sel = tree.selection()
+            if not sel:
+                return
+            vals = tree.item(sel[0], "values")
+            self.open_url(str(vals[-1]))
 
         tree.bind("<<TreeviewSelect>>", on_select)
-        tree.bind("<Double-1>", lambda e: self.open_url(str(tree.item(tree.selection()[0], "values")[-1])) if tree.selection() else None)
+        tree.bind("<Double-1>", on_double_click)
 
     def generate_report(self):
         df_filtered = self.filtered_df()
@@ -593,10 +674,47 @@ class OSINTCleanGUI(tk.Tk):
                 grievance_html += "</ul>"
             else: grievance_html += "<p>No significant negative posts found.</p>"
 
-            mosaic_conclusion = "<h3>The Mosaic Effect: Synthesized Intelligence</h3><p>This section synthesizes the individual analyses into a cohesive narrative.</p>"
-            if anomalies: mosaic_conclusion += "<p>The target's pattern of life shows significant disruptions. These events should be cross-referenced with other intelligence sources.</p>"
-            else: mosaic_conclusion += "<p>The target exhibits a stable and predictable pattern of life.</p>"
-            if sna_path: mosaic_conclusion += "<p>The social network analysis identifies key individuals in the target's digital life.</p>"
+            # Mosaic Effect Conclusion
+            mosaic_conclusion = """
+            <h3>The Mosaic Effect: Synthesized Intelligence</h3>
+            <p>This section synthesizes the individual analyses into a cohesive narrative.</p>
+            """
+            if anomalies:
+                mosaic_conclusion += "<p>The target's pattern of life shows significant disruptions. The detected anomalies, when viewed together, suggest periods of stress, travel, or unusual activity. For instance, a mood drop coinciding with a travel anomaly could indicate stressful travel. These events should be cross-referenced with other intelligence sources.</p>"
+                
+                if not travel_anomalies.empty:
+                    mosaic_conclusion += "<h4>Travel Anomalies</h4><ul>"
+                    for _, row in travel_anomalies.iterrows():
+                        loc = row['location'] if pd.notna(row['location']) and str(row['location']).strip() else 'Unknown'
+                        mosaic_conclusion += f"<li><b>Location:</b> {loc} | <b>Date/Time:</b> {row['timestamp_utc']} | <b>Caption:</b> {str(row['caption'])[:100]}...</li>"
+                    mosaic_conclusion += "</ul>"
+                    
+                if 'sleep_posts' in locals() and not sleep_posts.empty:
+                    mosaic_conclusion += "<h4>Routine Disruptions (Sleep)</h4><ul>"
+                    for _, row in sleep_posts.iterrows():
+                        loc = row['location'] if pd.notna(row['location']) and str(row['location']).strip() else 'Unknown'
+                        mosaic_conclusion += f"<li><b>Location:</b> {loc} | <b>Date/Local Time:</b> {row['local_time']:%Y-%m-%d %H:%M} | <b>Caption:</b> {str(row['caption'])[:100]}...</li>"
+                    mosaic_conclusion += "</ul>"
+                    
+                if not mood_drops.empty:
+                    mosaic_conclusion += "<h4>Mood Drops</h4><ul>"
+                    for _, row in mood_drops.iterrows():
+                        loc = row['location'] if pd.notna(row['location']) and str(row['location']).strip() else 'Unknown'
+                        mosaic_conclusion += f"<li><b>Location:</b> {loc} | <b>Date/Time:</b> {row['timestamp_utc']} | <b>Caption:</b> {str(row['caption'])[:100]}...</li>"
+                    mosaic_conclusion += "</ul>"
+            else:
+                mosaic_conclusion += "<p>The target exhibits a stable and predictable pattern of life. Their activity is consistent, with few deviations from their established routine. This predictability can be used to forecast future behavior.</p>"
+            
+            if not grievances.empty:
+                mosaic_conclusion += "<p>Recurring negative sentiment (grievances) often centers on specific themes. Further analysis of these themes could reveal the target's personal or professional stressors.</p>"
+                mosaic_conclusion += "<h4>Grievances</h4><ul>"
+                for _, row in grievances.iterrows():
+                    loc = row['location'] if pd.notna(row['location']) and str(row['location']).strip() else 'Unknown'
+                    mosaic_conclusion += f"<li><b>Location:</b> {loc} | <b>Date/Time:</b> {row['timestamp_utc']} | <b>Caption:</b> {str(row['caption'])[:100]}...</li>"
+                mosaic_conclusion += "</ul>"
+            
+            if sna_path:
+                mosaic_conclusion += "<p>The social network analysis identifies key individuals in the target's digital life. These individuals represent potential sources of secondary information leakage and are persons of interest for further investigation.</p>"
 
             html_content = f"""
             <!DOCTYPE html>
