@@ -1,37 +1,37 @@
-from __future__ import annotations
+from __future__ import annotations  # Import necessary module or component
 
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from typing import List
+from dataclasses import dataclass  # Import necessary module or component
+from datetime import date, datetime, timedelta  # Import necessary module or component
+from typing import List  # Import necessary module or component
 
-from app.scraper import Post
-
-
-@dataclass
-class TimeWindow:
-    start: date
-    end: date
+from app.scraper import Post  # Import necessary module or component
 
 
-def last_n_days(days: int) -> TimeWindow:
-    today = date.today()
-    start = today - timedelta(days=days - 1)
-    return TimeWindow(start=start, end=today)
+@dataclass  # Apply decorator
+class TimeWindow:  # Define class TimeWindow
+    start: date  # Execute statement or expression
+    end: date  # Execute statement or expression
 
 
-def full_window(posts: List[Post]) -> TimeWindow:
-    if not posts:
-        today = date.today()
-        return TimeWindow(start=today, end=today)
-    first = min(p.timestamp.date() for p in posts)
-    last = max(p.timestamp.date() for p in posts)
-    return TimeWindow(start=first, end=last)
+def last_n_days(days: int) -> TimeWindow:  # Define function last_n_days
+    today = date.today()  # Assign value to today
+    start = today - timedelta(days=days - 1)  # Assign value to start
+    return TimeWindow(start=start, end=today)  # Return value from function
 
 
-def filter_posts(posts: List[Post], window: TimeWindow) -> List[Post]:
-    out: List[Post] = []
-    for p in posts:
-        d = p.timestamp.date()
-        if window.start <= d <= window.end:
-            out.append(p)
-    return out
+def full_window(posts: List[Post]) -> TimeWindow:  # Define function full_window
+    if not posts:  # Check conditional statement
+        today = date.today()  # Assign value to today
+        return TimeWindow(start=today, end=today)  # Return value from function
+    first = min(p.timestamp.date() for p in posts)  # Assign value to first
+    last = max(p.timestamp.date() for p in posts)  # Assign value to last
+    return TimeWindow(start=first, end=last)  # Return value from function
+
+
+def filter_posts(posts: List[Post], window: TimeWindow) -> List[Post]:  # Define function filter_posts
+    out: List[Post] = []  # Close bracket/parenthesis
+    for p in posts:  # Iterate in a loop
+        d = p.timestamp.date()  # Assign value to d
+        if window.start <= d <= window.end:  # Check conditional statement
+            out.append(p)  # Close bracket/parenthesis
+    return out  # Return value from function
