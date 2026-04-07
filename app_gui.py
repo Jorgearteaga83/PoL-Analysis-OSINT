@@ -136,7 +136,7 @@ class OSINTCleanGUI(tk.Tk):
     def _async_load_dataset(self, path: str):
         try:
             p = Path(path)
-            if p.suffix.lower() == ".csv": df_raw = pd.read_csv(p)
+            if p.suffix.lower() == ".csv": df_raw = pd.read_csv(p, low_memory=False)
             else: df_raw = pd.read_excel(p)
             df_norm = normalize_dataset(df_raw)
             self.task_queue.put(("dataset_loaded", (df_norm, p.name)))
@@ -413,10 +413,14 @@ class OSINTCleanGUI(tk.Tk):
         container = ttk.Frame(self.content_frame, style="Dark.TFrame")
         container.pack(fill=tk.BOTH, expand=True)
 
+        container.columnconfigure(0, weight=1, uniform="panels")
+        container.columnconfigure(1, weight=1, uniform="panels")
+        container.rowconfigure(0, weight=1)
+
         left = ttk.Frame(container, style="Dark.TFrame")
         right = ttk.Frame(container, style="Dark.TFrame")
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        right.pack(side=tk.LEFT, fill=tk.BOTH, padx=(10, 0))
+        left.grid(row=0, column=0, sticky="nsew")
+        right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
 
         tree_frame = ttk.Frame(left, style="Dark.TFrame")
         tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -450,8 +454,8 @@ class OSINTCleanGUI(tk.Tk):
             tree.heading(c, text=h)
             tree.column(c, width=w, anchor="w")
 
-        right.rowconfigure(0, weight=1)  # Give image and details equal weight
-        right.rowconfigure(1, weight=1)
+        right.rowconfigure(0, weight=1, uniform="group1")  # Give image and details equal weight
+        right.rowconfigure(1, weight=1, uniform="group1")
         right.columnconfigure(0, weight=1)
 
         preview_label = tk.Label(right, bg="#101620", fg="#E5F0FF", text="No image selected")

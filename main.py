@@ -13,6 +13,7 @@ def setup_logging():
             logging.StreamHandler(sys.stdout)
         ]
     )
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
 def main():
     setup_logging()
