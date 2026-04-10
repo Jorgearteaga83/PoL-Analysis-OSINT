@@ -62,3 +62,4 @@ The tool provides the following analyses:
 -   **Image Leakage & EXIF Analysis:** Analyzes images for EXIF metadata, including GPS coordinates and camera information.
 -   **Reporting (Intelligence Report):** Generates detailed HTML intelligence reports summarizing all findings, which include Social Network Analysis (SNA) and Behavioural Anomaly Analysis.
 -   **Raw Posts:** Shows a table of the raw post data.
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Jorgearteaga83/PoL-Analysis-OSINTorgearteaga83)
