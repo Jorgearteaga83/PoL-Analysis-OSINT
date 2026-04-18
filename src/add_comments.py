@@ -2,11 +2,19 @@ import os
 import re
 
 def get_comment_for_line(line):
+    """
+    Generates a descriptive comment for a given line of Python code based on regex patterns.
+
+    Args:
+        line (str): The line of Python code to analyze.
+
+    Returns:
+        str: A descriptive comment string, or None if no match is found.
+    """
     stripped = line.strip()
     if not stripped or stripped.startswith('#') or stripped.startswith('"""') or stripped.startswith("'''"):
         return None
     
-    # Try to match patterns
     if re.match(r'^import\s+', stripped) or re.match(r'^from\s+[\w\.]+\s+import\s+', stripped):
         return "Import necessary module or component"
     if m := re.match(r'^def\s+([\w_]+)', stripped):
@@ -65,6 +73,15 @@ def get_comment_for_line(line):
     return "Execute statement or expression"
 
 def process_file(filepath):
+    """
+    Reads a Python file, appends auto-generated descriptive comments to its lines, and overwrites it.
+
+    Args:
+        filepath (str): The path to the Python file to process.
+
+    Returns:
+        None
+    """
     with open(filepath, 'r', encoding='utf-8') as f:
         lines = f.readlines()
         
@@ -73,7 +90,6 @@ def process_file(filepath):
     for line in lines:
         stripped = line.strip()
         
-        # Simple multiline string tracking
         str_count = stripped.count('"""') + stripped.count("'''")
         if str_count % 2 != 0:
             in_multiline_string = not in_multiline_string
@@ -83,18 +99,14 @@ def process_file(filepath):
             continue
             
         comment = get_comment_for_line(line)
-        # Avoid lines that already have a comment
         if comment and not re.search(r'#.*', line):
             clean_line = line.rstrip()
-            # Calculate indent
             indent = line[:len(line) - len(line.lstrip())]
             
-            # If line is too long, add comment above
             if len(clean_line) > 100:
                 new_lines.append(f"{indent}# {comment}\n")
                 new_lines.append(line)
             else:
-                # Add comment at the end
                 new_lines.append(f"{clean_line}  # {comment}\n")
         else:
             new_lines.append(line)
@@ -103,6 +115,15 @@ def process_file(filepath):
         f.writelines(new_lines)
 
 def find_and_process():
+    """
+    Recursively finds and processes all Python files in the project directory to add comments.
+
+    Args:
+        None
+
+    Returns:
+        None
+    """
     root_dir = r"c:\Users\Lenovo ThinkPad\OneDrive - University of Greenwich\Year 4\POL OSINT toll github\PoL-Analysis-OSINT"
     exclude_dirs = {'venv', '.idea', '.git', '.pytest_cache'}
     

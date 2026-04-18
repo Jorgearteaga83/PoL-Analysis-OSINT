@@ -1,93 +1,127 @@
-import re  # Import necessary module or component
-import json  # Import necessary module or component
-import logging  # Import necessary module or component
-from typing import Any, Optional, Union, List  # Import necessary module or component
-import pandas as pd  # Import necessary module or component
+import re
+import json
+import logging
+from typing import Any, Optional, Union, List
+import pandas as pd
 
-logger = logging.getLogger(__name__)  # Assign value to logger
+logger = logging.getLogger(__name__)
 
-NaTType = type(pd.NaT)  # Assign value to NaTType
+NaTType = type(pd.NaT)
 
-def best_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:  # Define function best_col
-    """Return the first matching column name from candidates (case-insensitive)."""
-    cols_lower = {c.lower(): c for c in df.columns}  # Assign value to cols_lower
-    for cand in candidates:  # Iterate in a loop
-        if cand.lower() in cols_lower:  # Check conditional statement
-            return cols_lower[cand.lower()]  # Return value from function
-    return None  # Return value from function
+def best_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    """
+    Returns the first matching column name from candidates (case-insensitive).
 
-def to_datetime_safe(x: Any) -> Union[pd.Timestamp, NaTType]:  # Define function to_datetime_safe
-    """Parse timestamps robustly (unix seconds/ms OR ISO strings). Always UTC."""
-    if x is None or pd.isna(x):  # Check conditional statement
-        return pd.NaT  # Return value from function
+    Args:
+        df (pd.DataFrame): The dataframe to search within.
+        candidates (List[str]): A list of potential column names to look for.
 
-    if isinstance(x, (int, float)):  # Check conditional statement
-        try:  # Start of try block for exception handling
-            xi = int(x)  # Assign value to xi
-            if xi > 10_000_000_000:  # Check conditional statement
-                return pd.to_datetime(xi, unit="ms", utc=True, errors="coerce")  # Return value from function
-            return pd.to_datetime(xi, unit="s", utc=True, errors="coerce")  # Return value from function
-        except (ValueError, OverflowError, TypeError) as e:  # Handle specific exceptions
-            logger.debug(f"Failed to parse numeric timestamp {x}: {e}")  # Close bracket/parenthesis
-            return pd.NaT  # Return value from function
+    Returns:
+        Optional[str]: The matched column name from the dataframe, or None if no match is found.
+    """
+    cols_lower = {c.lower(): c for c in df.columns}
+    for cand in candidates:
+        if cand.lower() in cols_lower:
+            return cols_lower[cand.lower()]
+    return None
 
-    s = str(x).strip()  # Assign value to s
-    if not s:  # Check conditional statement
-        return pd.NaT  # Return value from function
+def to_datetime_safe(x: Any) -> Union[pd.Timestamp, NaTType]:
+    """
+    Parses timestamps robustly from unix seconds/milliseconds or ISO strings into UTC pandas Timestamps.
 
-    if re.fullmatch(r"\d{10,13}", s):  # Check conditional statement
-        try:  # Start of try block for exception handling
-            xi = int(s)  # Assign value to xi
-            if xi > 10_000_000_000:  # Check conditional statement
-                return pd.to_datetime(xi, unit="ms", utc=True, errors="coerce")  # Return value from function
-            return pd.to_datetime(xi, unit="s", utc=True, errors="coerce")  # Return value from function
-        except (ValueError, OverflowError) as e:  # Handle specific exceptions
-            logger.debug(f"Failed to parse string numeric timestamp {s}: {e}")  # Close bracket/parenthesis
-            return pd.NaT  # Return value from function
+    Args:
+        x (Any): The timestamp value to parse.
 
-    return pd.to_datetime(s, utc=True, errors="coerce")  # Return value from function
+    Returns:
+        Union[pd.Timestamp, NaTType]: The parsed pandas Timestamp in UTC, or NaT if parsing fails.
+    """
+    if x is None or pd.isna(x):
+        return pd.NaT
 
-def safe_json_loads(s: str) -> Optional[Any]:  # Define function safe_json_loads
-    try:  # Start of try block for exception handling
-        return json.loads(s)  # Return value from function
-    except json.JSONDecodeError as e:  # Handle specific exceptions
-        logger.debug(f"JSON decode failed for string: {e}")  # Close bracket/parenthesis
-        return None  # Return value from function
+    if isinstance(x, (int, float)):
+        try:
+            xi = int(x)
+            if xi > 10_000_000_000:
+                return pd.to_datetime(xi, unit="ms", utc=True, errors="coerce")
+            return pd.to_datetime(xi, unit="s", utc=True, errors="coerce")
+        except (ValueError, OverflowError, TypeError) as e:
+            logger.debug(f"Failed to parse numeric timestamp {x}: {e}")
+            return pd.NaT
 
-def extract_tagged_users(cell: Any) -> List[str]:  # Define function extract_tagged_users
-    """Extract tagged usernames from list/dict/json-string or comma/space string."""
-    if cell is None or (not isinstance(cell, (list, dict)) and pd.isna(cell)):  # Check conditional statement
-        return []  # Return value from function
+    s = str(x).strip()
+    if not s:
+        return pd.NaT
 
-    if isinstance(cell, list):  # Check conditional statement
-        out = []  # Assign value to out
-        for item in cell:  # Iterate in a loop
-            if isinstance(item, str):  # Check conditional statement
-                out.append(item.strip().lstrip("@"))  # Close bracket/parenthesis
-            elif isinstance(item, dict):  # Check alternative condition
-                username = item.get("username") or item.get("user", {}).get("username")  # Assign value to username
-                if isinstance(username, str):  # Check conditional statement
-                    out.append(username.strip().lstrip("@"))  # Close bracket/parenthesis
-        return sorted({x for x in out if x})  # Return value from function
+    if re.fullmatch(r"\d{10,13}", s):
+        try:
+            xi = int(s)
+            if xi > 10_000_000_000:
+                return pd.to_datetime(xi, unit="ms", utc=True, errors="coerce")
+            return pd.to_datetime(xi, unit="s", utc=True, errors="coerce")
+        except (ValueError, OverflowError) as e:
+            logger.debug(f"Failed to parse string numeric timestamp {s}: {e}")
+            return pd.NaT
 
-    if isinstance(cell, dict):  # Check conditional statement
-        if "taggedUsers" in cell:  # Check conditional statement
-            return extract_tagged_users(cell.get("taggedUsers"))  # Return value from function
-        if "users" in cell:  # Check conditional statement
-            return extract_tagged_users(cell.get("users"))  # Return value from function
-        if isinstance(cell.get("username"), str):  # Check conditional statement
-            return [cell["username"].strip().lstrip("@")]  # Return value from function
-        return []  # Return value from function
+    return pd.to_datetime(s, utc=True, errors="coerce")
 
-    s = str(cell).strip()  # Assign value to s
-    if not s:  # Check conditional statement
-        return []  # Return value from function
+def safe_json_loads(s: str) -> Optional[Any]:
+    """
+    Safely parses a JSON string, returning None if decoding fails.
 
-    if s.startswith("[") or s.startswith("{"):  # Check conditional statement
-        obj = safe_json_loads(s)  # Assign value to obj
-        if obj is not None:  # Check conditional statement
-            return extract_tagged_users(obj)  # Return value from function
+    Args:
+        s (str): The JSON string to parse.
 
-    parts = re.split(r"[,\s]+", s)  # Assign value to parts
-    cleaned = [p.strip().lstrip("@") for p in parts if p.strip()]  # Assign value to cleaned
-    return sorted({x for x in cleaned if x})  # Return value from function
+    Returns:
+        Optional[Any]: The parsed JSON object, or None if decoding fails.
+    """
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError as e:
+        logger.debug(f"JSON decode failed for string: {e}")
+        return None
+
+def extract_tagged_users(cell: Any) -> List[str]:
+    """
+    Extracts a list of tagged usernames from various data formats (list, dict, JSON string, or delimited string).
+
+    Args:
+        cell (Any): The cell data containing tagged users.
+
+    Returns:
+        List[str]: A sorted list of unique tagged usernames.
+    """
+    if cell is None or (not isinstance(cell, (list, dict)) and pd.isna(cell)):
+        return []
+
+    if isinstance(cell, list):
+        out = []
+        for item in cell:
+            if isinstance(item, str):
+                out.append(item.strip().lstrip("@"))
+            elif isinstance(item, dict):
+                username = item.get("username") or item.get("user", {}).get("username")
+                if isinstance(username, str):
+                    out.append(username.strip().lstrip("@"))
+        return sorted({x for x in out if x})
+
+    if isinstance(cell, dict):
+        if "taggedUsers" in cell:
+            return extract_tagged_users(cell.get("taggedUsers"))
+        if "users" in cell:
+            return extract_tagged_users(cell.get("users"))
+        if isinstance(cell.get("username"), str):
+            return [cell["username"].strip().lstrip("@")]
+        return []
+
+    s = str(cell).strip()
+    if not s:
+        return []
+
+    if s.startswith("[") or s.startswith("{"):
+        obj = safe_json_loads(s)
+        if obj is not None:
+            return extract_tagged_users(obj)
+
+    parts = re.split(r"[,\s]+", s)
+    cleaned = [p.strip().lstrip("@") for p in parts if p.strip()]
+    return sorted({x for x in cleaned if x})
