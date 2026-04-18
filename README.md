@@ -64,4 +64,4 @@ The tool provides the following analyses:
 -   **Reporting (Intelligence Report):** Generates detailed HTML intelligence reports summarizing all findings, which include Social Network Analysis (SNA) and Behavioural Anomaly Analysis.
 -   **Raw Posts:** Shows a table of the raw post data.
 
-## [![Full DeepWiki documentation](https://deepwiki.com/Jorgearteaga83/PoL-Analysis-OSINT)
+[![Full DeepWiki documentation](https://deepwiki.com/Jorgearteaga83/PoL-Analysis-OSINT)
