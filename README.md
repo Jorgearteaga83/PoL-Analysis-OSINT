@@ -46,7 +46,8 @@ python src/main.py
 
 This opens the GUI dashboard, where you can:
 
--   Upload a dataset of social media posts.
+-   Upload a dataset of social media posts (Find sample datasets on the folder "data" within this repository).
+-   You can source your own datasets through [Apify](https://console.apify.com/actors/shu8hvrXbJbY3Eb9W/input)
 -   Filter posts by target account and time window.
 -   Perform overview, temporal, sentiment, and image leakage/EXIF analysis.
 -   Generate comprehensive intelligence reports (including Spatial, Social Network, and Behavioural/Anomaly analysis).
