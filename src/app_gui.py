@@ -128,7 +128,15 @@ class OSINTCleanGUI(tk.Tk):
             ttk.Radiobutton(left, text=t, value=t, variable=self.window_var).pack(anchor="w")
 
         self.start_entry = ttk.Entry(left, width=18)
+        self.start_entry.insert(0, "YYYY-MM-DD")
+        self.start_entry.bind("<FocusIn>", lambda e: self.start_entry.delete(0, tk.END) if self.start_entry.get() == "YYYY-MM-DD" else None)
+        self.start_entry.bind("<FocusOut>", lambda e: self.start_entry.insert(0, "YYYY-MM-DD") if not self.start_entry.get() else None)
+
         self.end_entry = ttk.Entry(left, width=18)
+        self.end_entry.insert(0, "YYYY-MM-DD")
+        self.end_entry.bind("<FocusIn>", lambda e: self.end_entry.delete(0, tk.END) if self.end_entry.get() == "YYYY-MM-DD" else None)
+        self.end_entry.bind("<FocusOut>", lambda e: self.end_entry.insert(0, "YYYY-MM-DD") if not self.end_entry.get() else None)
+
         self.start_entry.pack(anchor="w", pady=(5,0))
         self.end_entry.pack(anchor="w", pady=(5,0))
 
