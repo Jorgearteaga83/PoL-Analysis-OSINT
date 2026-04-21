@@ -7,6 +7,7 @@ import networkx as nx
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+plt.style.use('seaborn-v0_8-darkgrid')
 import reverse_geocoder as rg
 from timezonefinder import TimezoneFinder
 

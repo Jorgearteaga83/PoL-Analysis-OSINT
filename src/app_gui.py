@@ -16,6 +16,7 @@ from tkinter import ttk, messagebox, filedialog
 import pandas as pd
 from PIL import Image, ImageTk
 import matplotlib.pyplot as plt
+plt.style.use('seaborn-v0_8-darkgrid')
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.dates as mdates
 
@@ -61,7 +62,7 @@ class OSINTCleanGUI(tk.Tk):
             None
         """
         super().__init__()
-        self.title("OSINT Dataset Analysis (Offline Mode)")
+        self.title("Social Media Intelligence (SOCMINT)")
         self.geometry("1500x900")
         self.configure(bg="#050910")
 
@@ -486,7 +487,9 @@ class OSINTCleanGUI(tk.Tk):
         ax1.set_xlabel("Date")
         ax1.set_ylabel("Posts")
         ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-        fig1.autofmt_xdate()
+        for label in ax1.get_xticklabels():
+            label.set_rotation(45)
+            label.set_ha('right')
         fig1.tight_layout()
         embed_plot_in_tab(fig1, day_frame)
         plt.close(fig1)
@@ -499,6 +502,9 @@ class OSINTCleanGUI(tk.Tk):
         ax2.set_xlabel("Hour of Day (0–23)")
         ax2.set_ylabel("Posts")
         ax2.set_xticks(list(range(0, 24, 1)))
+        for label in ax2.get_xticklabels():
+            label.set_rotation(45)
+            label.set_ha('right')
         fig2.tight_layout()
         embed_plot_in_tab(fig2, hour_frame)
         plt.close(fig2)
@@ -510,7 +516,9 @@ class OSINTCleanGUI(tk.Tk):
         ax3.set_title("Weekly Posting Pattern")
         ax3.set_xlabel("Weekday")
         ax3.set_ylabel("Posts")
-        fig3.autofmt_xdate()
+        for label in ax3.get_xticklabels():
+            label.set_rotation(45)
+            label.set_ha('right')
         fig3.tight_layout()
         embed_plot_in_tab(fig3, weekday_frame)
         plt.close(fig3)
@@ -529,6 +537,9 @@ class OSINTCleanGUI(tk.Tk):
         cbar = ax4.figure.colorbar(im, ax=ax4)
         cbar.ax.set_ylabel("Activity Density", rotation=-90, va="bottom")
         ax4.set_title("Weekly Activity Heatmap (Day vs. Hour)")
+        for label in ax4.get_xticklabels():
+            label.set_rotation(45)
+            label.set_ha('right')
         fig4.tight_layout()
         embed_plot_in_tab(fig4, heatmap_frame)
         plt.close(fig4)
@@ -566,13 +577,14 @@ class OSINTCleanGUI(tk.Tk):
         fig, ax = plt.subplots(figsize=(9, 3.8))
         ax.plot(daily["date"], daily["avg_sentiment"], marker="o")
         ax.axhline(0, linestyle="--")
+        ax.set_ylim(-1, 1)
         ax.set_title("Daily Sentiment Trend (Average)")
         ax.set_xlabel("Date")
         ax.set_ylabel("Average Sentiment (≈ -1 to +1)")
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-        for label in ax.get_xticklabels(): 
+        for label in ax.get_xticklabels():
             label.set_rotation(45)
-            label.set_ha("right")
+            label.set_ha('right')
         fig.tight_layout()
         self.embed_plot(fig)
         plt.close(fig)
